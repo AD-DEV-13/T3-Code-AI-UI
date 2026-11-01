@@ -266,7 +266,7 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
     );
 
     // `claude -p` accepts images only as content blocks of a stream-json user message.
-    const apiModelId = resolveClaudeCatalogApiModelId(catalog, resolvedModelSelection);
+    const apiModelId = resolveClaudeCatalogApiModelId(catalog, modelSelection);
     const imageBlocks = textOnlyModels.has(apiModelId) ? [] : yield* readImageBlocks(attachments);
     const imageStdin =
       imageBlocks.length > 0
