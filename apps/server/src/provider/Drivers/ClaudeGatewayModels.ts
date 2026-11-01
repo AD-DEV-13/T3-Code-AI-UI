@@ -128,6 +128,7 @@ export function applyClaudeGatewayModels(
   const offered = new Set(models.map((model) => model.id));
   return {
     ...provider,
+    modelsAuthoritative: true,
     models: [
       ...models
         .filter((model) => !unavailable.has(model.id))
@@ -136,7 +137,7 @@ export function applyClaudeGatewayModels(
             known.get(model.id) ?? {
               slug: model.id,
               name: model.display_name || model.id,
-              isCustom: true,
+              isCustom: false,
               capabilities: { optionDescriptors: [] },
             },
         ),
