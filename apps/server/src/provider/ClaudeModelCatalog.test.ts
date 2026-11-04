@@ -83,7 +83,10 @@ describe("Claude model catalog", () => {
       presentation: { displayName: "Claude" },
       enabled: true,
       checkedAt: "2026-11-01T00:00:00Z",
+      updateRequiredModels: [{ slug: "claude-haiku-5-5", name: "Haiku", minVersion: "2.1.293" }],
       models: [
+        { slug: "haiku", name: "Custom Haiku", isCustom: true, capabilities: null },
+        { slug: "claude-sonnet-4-6", name: "Saved Sonnet", isCustom: false, capabilities: null },
         { slug: "known", name: "Known", isCustom: false, capabilities: null },
         { slug: "omitted", name: "Omitted", isCustom: false, capabilities: null },
         { slug: "saved", name: "Saved", isCustom: true, capabilities: null },
@@ -97,8 +100,13 @@ describe("Claude model catalog", () => {
     });
     const result = applyClaudeGatewayModels(
       provider,
-      [{ id: "known" }, { id: "claude-haiku-4-5-20251001", display_name: "Gateway Haiku" }],
+      [
+        { id: "known" },
+        { id: "claude-haiku-4-5-20251001", display_name: "Gateway Haiku" },
+        { id: "haiku" },
+      ],
       BUNDLED_CLAUDE_MODEL_CATALOG,
+      ["saved", "haiku", "claude-sonnet-4-6"],
     );
     assert.strictEqual(result.modelsAuthoritative, true);
     assert.deepStrictEqual(result.models, [
@@ -109,6 +117,8 @@ describe("Claude model catalog", () => {
         isCustom: false,
         capabilities: { optionDescriptors: [] },
       },
+      { slug: "haiku", name: "Custom Haiku", isCustom: true, capabilities: null },
+      { slug: "claude-sonnet-4-6", name: "Saved Sonnet", isCustom: false, capabilities: null },
       { slug: "saved", name: "Saved", isCustom: true, capabilities: null },
     ]);
   });
