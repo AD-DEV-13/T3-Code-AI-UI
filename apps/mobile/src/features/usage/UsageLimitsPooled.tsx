@@ -11,6 +11,7 @@ import {
   remainingPercent,
   type LimitAccount,
   type LimitPoolWindow,
+  resetCreditsForWindow,
 } from "@t3tools/shared/usageLimits";
 import {
   collectExternalUsageLinks,
@@ -248,7 +249,11 @@ function PoolWindowCard({
           );
         const { account, window } = member;
         const timeLeft = paceRemainingPercent(window, now);
-        const credits = account.limits.resetCredits?.availableCount ?? 0;
+        const { count: credits, scope } = resetCreditsForWindow(
+          account.limits.resetCredits,
+          account.limits.windows,
+          window.id,
+        );
         const resetsIn = resetLabels(window, now, m)?.compact;
         return (
           <Pressable
@@ -324,6 +329,9 @@ function PoolWindowCard({
                         <Text className="text-xs font-t3-medium tabular-nums text-foreground">
                           {credits}
                         </Text>
+                        {scope ? (
+                          <Text className="text-xs text-foreground-muted">{scope}</Text>
+                        ) : null}
                       </>
                     ) : null}
                   </View>
@@ -352,7 +360,11 @@ function PoolWindowCard({
       {pool.columns.map(({ account, window }, index) => {
         if (!window) return null;
         const segmentColor = normalizeProviderAccentColor(account.accentColor) ?? color;
-        const credits = account.limits.resetCredits?.availableCount ?? 0;
+        const { count: credits, scope } = resetCreditsForWindow(
+          account.limits.resetCredits,
+          account.limits.windows,
+          window.id,
+        );
         const reset = resetLabels(window, now, m);
         const resetsIn = reset?.full;
         return (
@@ -437,6 +449,7 @@ function PoolWindowCard({
                   <Text className="text-xs font-t3-medium tabular-nums text-foreground">
                     {credits}
                   </Text>
+                  {scope ? <Text className="text-xs text-foreground-muted">{scope}</Text> : null}
                 </>
               ) : null}
             </View>
