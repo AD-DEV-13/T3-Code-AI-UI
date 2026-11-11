@@ -42,10 +42,12 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import {
   buildTemporaryWorktreeBranchName,
+  deriveLocalBranchNameFromRemoteRef,
   flattenTemporaryWorktreeBranchName,
   formatGeneratedBranchName,
   isTemporaryWorktreeBranch,
 } from "@t3tools/shared/git";
+import { workspaceRelativeFilePath } from "@t3tools/shared/path";
 
 import * as CheckpointStore from "../checkpointing/CheckpointStore.ts";
 import * as GitWorkflow from "../git/GitWorkflowService.ts";
@@ -83,6 +85,7 @@ export type ThreadLaunchWorkspaceStrategy =
       readonly branch?: string | undefined;
       readonly startFromOrigin?: boolean | undefined;
       readonly repositories?: ReadonlyArray<{ readonly path: string }> | undefined;
+      readonly checkoutExisting?: boolean | undefined;
     };
 
 export interface ThreadLaunchInitialMessage {
@@ -542,6 +545,54 @@ const make = Effect.gen(function* () {
       : null;
   });
 
+  // A remote ref resolves to its local branch name; `ref` is that local branch when it exists.
+  const findExistingBranch = Effect.fn("ThreadLaunchService.findExistingBranch")(function* (
+    cwd: string,
+    refName: string,
+  ) {
+    const findLocal = Effect.fn("ThreadLaunchService.findLocalBranch")(function* (name: string) {
+      let cursor: number | undefined;
+      do {
+        const result = yield* git.listRefs({ cwd, refKind: "local", query: name, cursor });
+        const match = result.refs.find((ref) => ref.name === name);
+        if (match !== undefined) return match;
+        cursor = result.nextCursor ?? undefined;
+      } while (cursor !== undefined);
+      return undefined;
+    });
+    const exact = yield* findLocal(refName);
+    if (exact !== undefined) return { name: refName, ref: exact };
+    const name = deriveLocalBranchNameFromRemoteRef(refName);
+    return { name, ref: name === refName ? undefined : yield* findLocal(name) };
+  });
+
+  // Opening a branch that already has a worktree joins it; Git can't check one branch out twice.
+  const bindCheckedOutBranch = Effect.fn("ThreadLaunchService.bindCheckedOutBranch")(function* (
+    input: ThreadLaunchInput,
+    threadId: ThreadId,
+  ) {
+    const strategy = input.workspaceStrategy;
+    if (strategy.type !== "worktree" || strategy.checkoutExisting !== true) return strategy;
+    const project = Option.getOrUndefined(
+      yield* projects
+        .getById(input.projectId)
+        .pipe(Effect.mapError(mapError(input, "resolve-project", threadId))),
+    );
+    if (project === undefined) return strategy;
+    const { name, ref } = yield* findExistingBranch(project.workspaceRoot, strategy.baseRef).pipe(
+      Effect.mapError(mapError(input, "provision-worktree", threadId)),
+    );
+    if (!ref?.worktreePath) return strategy;
+    if (workspaceRelativeFilePath(project.workspaceRoot, ref.worktreePath) !== null) {
+      return yield* mapError(
+        input,
+        "provision-worktree",
+        threadId,
+      )(`${name} is checked out in the project folder, so it can't open in a separate worktree.`);
+    }
+    return { type: "existing_worktree" as const, worktreePath: ref.worktreePath, branch: name };
+  });
+
   const prepareInBackground = Effect.fn("ThreadLaunchService.prepareInBackground")(function* (
     input: PreparationInput,
     threadId: ThreadId,
@@ -635,8 +686,13 @@ const make = Effect.gen(function* () {
       );
 
       const requestedBranch = input.workspaceStrategy.branch;
+      const checkoutExisting =
+        input.workspaceStrategy.type === "worktree" &&
+        input.workspaceStrategy.checkoutExisting === true;
       const generatedTemporaryBranch =
-        input.workspaceStrategy.type === "worktree" && requestedBranch === undefined;
+        input.workspaceStrategy.type === "worktree" &&
+        requestedBranch === undefined &&
+        !checkoutExisting;
       let branch: string | null;
       if (generatedTemporaryBranch) {
         const uuid = yield* randomUuidV4;
@@ -663,6 +719,13 @@ const make = Effect.gen(function* () {
         const taskPlan = yield* taskFolders
           .plan({ projectId: project.id, repositories: input.workspaceStrategy.repositories })
           .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)));
+        if (checkoutExisting && taskPlan !== null) {
+          return yield* mapError(
+            input,
+            "provision-worktree",
+            threadId,
+          )("Open in worktree isn't available for projects that cover several repositories.");
+        }
         // A plain project folder has no branch of its own to fetch or start from.
         const projectIsRepository = taskPlan === null || taskPlan.projectIsRepository;
         if (runId !== null) {
@@ -680,7 +743,9 @@ const make = Effect.gen(function* () {
         let startRef = requestedBaseRef;
         let baseRefName = requestedBaseRef;
         const remote =
-          input.workspaceStrategy.startFromOrigin === true && projectIsRepository
+          !checkoutExisting &&
+          input.workspaceStrategy.startFromOrigin === true &&
+          projectIsRepository
             ? yield* git
                 .resolveWorktreeBaseRemote({
                   cwd: project.workspaceRoot,
@@ -760,13 +825,21 @@ const make = Effect.gen(function* () {
           }
         }
         yield* setupTracker.stageStatus(threadId, "checkout", "running");
+        const existing = checkoutExisting
+          ? yield* findExistingBranch(project.workspaceRoot, startRef).pipe(
+              Effect.mapError(mapError(input, "provision-worktree", threadId)),
+            )
+          : undefined;
+        // Cleanup on cancel deletes only a branch this launch created.
+        const ownedBranch =
+          existing === undefined ? branch : existing.ref === undefined ? existing.name : null;
         let submoduleProgressReportedAt = Number.NEGATIVE_INFINITY;
         const progress: GitVcsDriver.CreateWorktreeProgress = {
           onWorktreeClaimed: (path) =>
             Effect.sync(() => {
               createdWorktreePath = path;
               // A task folder has already claimed the name its repositories share.
-              createdBranch ??= branch;
+              createdBranch ??= ownedBranch;
             }),
           onCheckoutProgress: (progress) =>
             setupTracker.stage(threadId, "checkout", { percent: progress.percent }),
@@ -804,13 +877,22 @@ const make = Effect.gen(function* () {
           taskPlan === null
             ? (yield* git
                 .createWorktree(
-                  {
-                    cwd: project.workspaceRoot,
-                    refName: startRef,
-                    newRefName: branch!,
-                    baseRefName,
-                    path: null,
-                  },
+                  existing
+                    ? existing.ref === undefined
+                      ? {
+                          cwd: project.workspaceRoot,
+                          refName: startRef,
+                          newRefName: existing.name,
+                          path: null,
+                        }
+                      : { cwd: project.workspaceRoot, refName: existing.name, path: null }
+                    : {
+                        cwd: project.workspaceRoot,
+                        refName: startRef,
+                        newRefName: branch!,
+                        baseRefName,
+                        path: null,
+                      },
                   { progress },
                 )
                 .pipe(
@@ -858,7 +940,7 @@ const make = Effect.gen(function* () {
         worktreePath = worktree.path;
         branch = worktree.refName;
         createdWorktreePath = worktreePath;
-        createdBranch = branch;
+        createdBranch = ownedBranch === null ? null : branch;
         yield* setupTracker.update(threadId, (snapshot) => ({
           ...snapshot,
           worktreePath,
@@ -1417,7 +1499,7 @@ const make = Effect.gen(function* () {
                   onSome: (worktreePath) => ({ type: "existing_worktree", worktreePath }),
                 },
               )
-            : input.workspaceStrategy;
+            : yield* bindCheckedOutBranch(input, candidateThreadId);
         const initialBranch = yield* Effect.interruptible(
           launchBranch(workspaceStrategy, project.workspaceRoot),
         );

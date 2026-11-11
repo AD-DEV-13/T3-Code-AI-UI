@@ -94,6 +94,7 @@ interface BranchToolbarBranchSelectorProps {
   activeThreadBranchOverride?: string | null;
   onActiveThreadBranchOverrideChange?: (refName: string | null) => void;
   startFromOrigin: boolean;
+  checkoutBranch?: boolean;
   onStartFromOriginChange: (startFromOrigin: boolean) => void;
   onCheckoutPullRequestRequest?: (reference: string) => void;
   onComposerFocusRequest?: () => void;
@@ -120,6 +121,7 @@ export function BranchToolbarBranchSelector({
   activeThreadBranchOverride,
   onActiveThreadBranchOverrideChange,
   startFromOrigin,
+  checkoutBranch = false,
   onStartFromOriginChange,
   onCheckoutPullRequestRequest,
   onComposerFocusRequest,
@@ -346,6 +348,7 @@ export function BranchToolbarBranchSelector({
     activeWorktreePath,
     activeThreadBranch,
     currentGitBranch,
+    checkoutBranch,
   });
   const [branchHold, setBranchHold] = useState<BranchHold | null>(null);
   const branchHoldCurrent =
@@ -663,6 +666,7 @@ export function BranchToolbarBranchSelector({
   useEffect(() => {
     if (
       threadStarted ||
+      checkoutBranch ||
       effectiveEnvMode !== "worktree" ||
       activeWorktreePath ||
       activeThreadBranch ||
@@ -674,6 +678,7 @@ export function BranchToolbarBranchSelector({
   }, [
     activeThreadBranch,
     activeWorktreePath,
+    checkoutBranch,
     effectiveEnvMode,
     setThreadBranch,
     threadStarted,
@@ -711,6 +716,7 @@ export function BranchToolbarBranchSelector({
       resolvedActiveBranch,
       resolvedActiveBranchIsRemote,
       startFromOrigin,
+      checkoutBranch,
     },
     messages,
   );
@@ -850,7 +856,7 @@ export function BranchToolbarBranchSelector({
             : "branch"
       }
       originControl={
-        isSelectingWorktreeBase
+        isSelectingWorktreeBase && !checkoutBranch
           ? { checked: startFromOrigin, onCheckedChange: onStartFromOriginChange }
           : undefined
       }
