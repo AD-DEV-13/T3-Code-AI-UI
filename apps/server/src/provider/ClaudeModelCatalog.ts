@@ -233,7 +233,10 @@ export function resolveClaudeCatalogModel(
     catalog.models.find((entry) => entry.model.slug === value) ??
     catalog.models.find((entry) =>
       entry.model.aliases?.some((alias) => alias.toLowerCase() === value.toLowerCase()),
-    )
+    ) ??
+    (/^claude-.+-\d{8}$/.test(value)
+      ? resolveClaudeCatalogModel(catalog, value.replace(/-\d{8}$/, ""))
+      : undefined)
   );
 }
 
