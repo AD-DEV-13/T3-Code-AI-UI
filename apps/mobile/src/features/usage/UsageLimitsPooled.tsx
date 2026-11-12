@@ -12,6 +12,7 @@ import {
   type LimitAccount,
   type LimitPoolWindow,
   resetCreditsForWindow,
+  usageShareSummary,
 } from "@t3tools/shared/usageLimits";
 import {
   collectExternalUsageLinks,
@@ -526,6 +527,7 @@ export function UsageLimitsSection({
                   pool.driver === "cursor"
                     ? cursorUsageWindowDetails(window.id, pool, m)
                     : undefined;
+                const share = window.members.find((member) => member.window.share)?.window.share;
                 return (
                   <PoolWindowCard
                     key={`${window.kind}:${window.id}`}
@@ -536,7 +538,9 @@ export function UsageLimitsSection({
                       selectedEnvironmentIds === null ? null : [...selectedEnvironmentIds]
                     }
                     label={details?.label}
-                    description={details?.description}
+                    description={
+                      details?.description ?? usageShareSummary(share, windows) ?? undefined
+                    }
                     wide={wide}
                   />
                 );
