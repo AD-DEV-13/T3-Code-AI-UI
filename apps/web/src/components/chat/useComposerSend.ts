@@ -1576,6 +1576,7 @@ export function useComposerSend(input: ComposerSendInput) {
                 envMode: sendEnvMode,
                 branch: activeThreadBranch,
                 startFromOrigin,
+                checkoutBranch,
               }),
             ),
           );
