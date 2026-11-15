@@ -232,7 +232,6 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
               Effect.andThen(modelRoutes.record(capabilities.models ?? [])),
             ),
           ),
-          Effect.ensuring(modelRoutes.settle),
           Effect.catch((error) =>
             Ref.getAndSet(lastGoodCapabilities, undefined).pipe(
               Effect.flatMap((capabilities) =>
@@ -300,14 +299,14 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
                     processEnv,
                     stateDir,
                   ).pipe(Effect.provideService(HttpClient.HttpClient, httpClient));
-                  return models === undefined
-                    ? provider
-                    : applyClaudeGatewayModels(
-                        provider,
-                        models,
-                        catalog,
-                        effectiveConfig.customModels,
-                      );
+                  if (models === undefined) return provider;
+                  yield* modelRoutes.recordGateway(models.map((model) => model.id));
+                  return applyClaudeGatewayModels(
+                    provider,
+                    models,
+                    catalog,
+                    effectiveConfig.customModels,
+                  );
                 }),
               ),
             ),
@@ -320,7 +319,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
           Effect.map(stampIdentity),
         ),
       ),
-      // Disabled, failed version checks and interruption never reach the probe.
+      // Release waiting turns even if the check cannot discover routes.
       Effect.ensuring(modelRoutes.settle),
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       Effect.provideService(FileSystem.FileSystem, fileSystem),

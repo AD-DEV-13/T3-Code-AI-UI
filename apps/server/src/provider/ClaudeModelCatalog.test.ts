@@ -89,6 +89,12 @@ describe("Claude model catalog", () => {
       updateRequiredModels: [{ slug: "claude-haiku-5-5", name: "Haiku", minVersion: "2.1.293" }],
       models: [
         opus,
+        {
+          slug: "claude-opus-4-5-20251101",
+          name: "SDK dated Opus",
+          isCustom: false,
+          capabilities: { optionDescriptors: [] },
+        },
         { slug: "haiku", name: "Custom Haiku", isCustom: true, capabilities: null },
         { slug: "claude-sonnet-4-6", name: "Saved Sonnet", isCustom: false, capabilities: null },
         { slug: "known", name: "Known", isCustom: false, capabilities: null },
@@ -97,7 +103,7 @@ describe("Claude model catalog", () => {
       ],
       probe: {
         installed: true,
-        version: "2.1.316",
+        version: "2.1.250",
         status: "ready",
         auth: { status: "authenticated" },
       },
@@ -107,6 +113,7 @@ describe("Claude model catalog", () => {
       [
         { id: "known" },
         { id: "claude-opus-4-5-20251101" },
+        { id: "fable-5.1" },
         { id: "claude-haiku-5-5-20261101" },
         { id: "claude-haiku-4-5-20251001", display_name: "Gateway Haiku" },
         { id: "haiku" },
@@ -275,6 +282,14 @@ describe("Claude model catalog", () => {
       }),
       "claude-synthetic-next[large]",
     );
+    const gatewayCatalog = { ...catalog, gatewayModelIds: new Set(["synthetic"]) };
+    assert.strictEqual(
+      resolveClaudeCatalogApiModelId(gatewayCatalog, {
+        instanceId: ProviderInstanceId.make("claudeAgent"),
+        model: "synthetic",
+      }),
+      "synthetic[large]",
+    );
   });
 
   it("appends custom models with their own descriptors and keeps bare slugs opaque", () => {
@@ -384,6 +399,7 @@ describe("Claude model catalog", () => {
       "us.anthropic.claude-opus-4-6-v1",
     );
     assert.strictEqual(apiModel(defaultBedrock, "claude-haiku-4-5"), "haiku");
+    assert.strictEqual(apiModel(defaultBedrock, "claude-haiku-4-5-20251001"), "haiku");
     assert.strictEqual(apiModel(defaultBedrock, "claude-haiku-5-5"), "claude-haiku-5-5");
 
     // First-party ids already are what Claude Code runs, even when an alias points elsewhere.

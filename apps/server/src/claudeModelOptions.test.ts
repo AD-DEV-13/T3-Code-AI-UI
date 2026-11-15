@@ -22,6 +22,12 @@ describe("compileClaudeModelSelection", () => {
     expect(compileClaudeModelSelection(selection("claude-haiku-4-5-20251001", [])).apiModelId).toBe(
       "claude-haiku-4-5-20251001",
     );
+    expect(
+      compileClaudeModelSelection(selection("haiku", []), {
+        ...BUNDLED_CLAUDE_MODEL_CATALOG,
+        gatewayModelIds: new Set(["haiku"]),
+      }),
+    ).toMatchObject({ apiModelId: "haiku", pinnedAlias: "haiku" });
     for (const model of ["claude-opus-4-6", "claude-opus-4-6-20261101"]) {
       expect(
         compileClaudeModelSelection(
