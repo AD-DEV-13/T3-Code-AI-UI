@@ -1650,6 +1650,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   ) => {
     void (async () => {
       const threadKey = scopedThreadKey(threadRef);
+      const thread = readThreadShell(threadRef);
+      if (thread && isThreadWorking(thread)) return;
       if (settlingThreadKeysRef.current.has(threadKey)) return;
       settlingThreadKeysRef.current.add(threadKey);
       const navigateAfterSettle = planForwardNavigation(threadKey, opts.coSettlingKeys);
@@ -1691,7 +1693,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     const coSettlingKeys = new Set(threadKeys);
     for (const threadKey of threadKeys) {
       const thread = threadByKeyRef.current.get(threadKey);
-      if (!thread || thread.settledOverride === "settled") continue;
+      if (!thread || thread.settledOverride === "settled" || isThreadWorking(thread)) continue;
       attemptSettle(scopeThreadRef(thread.environmentId, thread.id), { coSettlingKeys });
     }
   };
@@ -1856,7 +1858,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         return (
           thread !== undefined &&
           sectionByThreadKeyRef.current.get(key) === originSection &&
-          serverConfigs.has(thread.environmentId)
+          serverConfigs.has(thread.environmentId) &&
+          (action !== "settle" || !isThreadWorking(thread))
         );
       };
       let targetKey: string | null = null;
@@ -2348,7 +2351,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         return thread ? [thread] : [];
       });
       const settlingThreads = selectedThreads.filter(
-        (thread) => thread.settledOverride !== "settled",
+        (thread) => thread.settledOverride !== "settled" && !isThreadWorking(thread),
       );
       const canSnoozeSelection = selectedThreads.every(
         (thread) =>
@@ -2384,11 +2387,15 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             ...(unpinMenuItem
               ? [{ ...unpinMenuItem, disabled: !canOperateThreads(pinnedSelectedThreads) }]
               : []),
-            {
-              id: "settle",
-              label: gt("Settle ({count})", { count }),
-              disabled: settlingThreads.length === 0 || !canOperateThreads(settlingThreads),
-            },
+            ...(settlingThreads.length > 0
+              ? [
+                  {
+                    id: "settle",
+                    label: gt("Settle ({count})", { count: settlingThreads.length }),
+                    disabled: !canOperateThreads(settlingThreads),
+                  },
+                ]
+              : []),
             ...(canSnoozeSelection
               ? [
                   {
@@ -2445,7 +2452,11 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                   const current = threadByKeyRef.current.get(
                     scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
                   );
-                  return current && current.settledOverride !== "settled" ? [current] : [];
+                  return current &&
+                    current.settledOverride !== "settled" &&
+                    !isThreadWorking(current)
+                    ? [current]
+                    : [];
                 })
               : selectedThreads;
       if (clicked.value === "settle" && actionTargets.length === 0) return;
@@ -2715,6 +2726,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
               isRegeneratingTitle,
               isRunning: !threadRuntimeCanArchive(thread.runtime),
               hasCompletedRun: thread.latestRun?.completedAt != null,
+              isWorking: isThreadWorking(thread),
               canShareWithGuest: appAtomRegistry.get(
                 canShareWithGuestAtom(threadRef.environmentId),
               ),
