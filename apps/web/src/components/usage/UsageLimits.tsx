@@ -16,7 +16,6 @@ import {
   paceRemainingPercent,
   remainingPercent,
   sharedUsage,
-  usageShareSummary,
   type ResetCreditChoice,
 } from "@t3tools/shared/usageLimits";
 import { GaugeIcon, TrendingDownIcon, TrendingUpIcon } from "lucide-react";
@@ -43,7 +42,11 @@ import {
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { UsageLimitsPooled } from "./UsageLimitsPooled";
-import { formatResetsIn, resetCreditChoices } from "@t3tools/shared/usageLimitsCopy";
+import {
+  usageShareSummary,
+  formatResetsIn,
+  resetCreditChoices,
+} from "@t3tools/shared/usageLimitsCopy";
 import { PROVIDER_PRESENTATION } from "./usageProviders";
 
 const PACE: Record<LimitPace, { readonly label: string; readonly icon: typeof GaugeIcon }> = {
@@ -265,8 +268,8 @@ export function LimitWindows({
     >
       {windows.map((window) => {
         const pace = paceOf(window, now);
+        const shareSummary = usageShareSummary(window.share, windows, m);
         const resetsIn = formatResetsIn(window, now, m);
-        const shareSummary = usageShareSummary(window.share, windows);
         return (
           <Fragment key={window.id}>
             <span className="flex min-w-0 items-center gap-2 text-xs">
