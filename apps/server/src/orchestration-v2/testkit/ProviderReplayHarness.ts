@@ -292,6 +292,7 @@ export function layerWithRegistry<Error>(
     readonly runContinuationWorker?: boolean;
     readonly recoverOnStartup?: boolean;
     readonly continueThreadsAfterServerUpdate?: boolean;
+    readonly serverSettingsOverrides?: Parameters<typeof ServerSettings.layerTest>[0];
     /** Lets a test hold a projection read open to order concurrent dispatches. */
     readonly wrapProjectionStore?: (
       store: ProjectionStore.ProjectionStoreV2Shape,
@@ -333,6 +334,7 @@ export function layerWithRegistry<Error>(
     Effect.map(ManagedPolicy.fromDocument("/test/policy.json", options.managedPolicy), (policy) =>
       ServerSettings.layerTest(
         {
+          ...options.serverSettingsOverrides,
           responseStreamingMode: "turn",
           ...(options.continueThreadsAfterServerUpdate === undefined
             ? {}
