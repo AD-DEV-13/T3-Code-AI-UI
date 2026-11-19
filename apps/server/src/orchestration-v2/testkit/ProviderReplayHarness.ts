@@ -297,6 +297,9 @@ export function layerWithRegistry<Error>(
     readonly wrapProjectionStore?: (
       store: ProjectionStore.ProjectionStoreV2Shape,
     ) => ProjectionStore.ProjectionStoreV2Shape;
+    readonly wrapProviderEventIngestor?: (
+      ingestor: ProviderEventIngestor.ProviderEventIngestorV2Shape,
+    ) => ProviderEventIngestor.ProviderEventIngestorV2Shape;
     readonly managedPolicy?: ManagedPolicyDocument;
     /** The instances the ingestor reads snapshots from, such as an endpoint behind a hub. */
     readonly providerInstances?: Partial<
@@ -372,7 +375,7 @@ export function layerWithRegistry<Error>(
   const layerCommandReceiptStoreProvided = CommandReceiptStore.layer.pipe(
     Layer.provide(layerDatabase),
   );
-  const layerProviderEventIngestorProvided = ProviderEventIngestor.layer.pipe(
+  const layerProviderEventIngestorBase = ProviderEventIngestor.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
         Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)(
@@ -389,6 +392,16 @@ export function layerWithRegistry<Error>(
       ),
     ),
   );
+  const layerProviderEventIngestorProvided =
+    options.wrapProviderEventIngestor === undefined
+      ? layerProviderEventIngestorBase
+      : Layer.effect(
+          ProviderEventIngestor.ProviderEventIngestorV2,
+          Effect.map(
+            ProviderEventIngestor.ProviderEventIngestorV2,
+            options.wrapProviderEventIngestor,
+          ),
+        ).pipe(Layer.provide(layerProviderEventIngestorBase));
   const layerVcsDriverRegistry = VcsDriverRegistry.layer.pipe(
     Layer.provide(VcsProcess.layer),
     Layer.provide(layerServerConfig),
