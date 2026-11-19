@@ -5987,13 +5987,20 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         [
           "runs",
           ...(command.continuationAfterRunId === undefined ? [] : (["messages"] as const)),
+          ...(command.continuationAfterRunId === undefined ? [] : (["turnItems"] as const)),
           ...(command.sourcePoint.type === "checkpoint" ? (["checkpoints"] as const) : []),
           "providerThreads",
           ...(command.continuationAfterRunId === undefined ? [] : (["providerSessions"] as const)),
           "providerTurns",
           "attempts",
         ],
-        command.continuationAfterRunId === undefined ? undefined : { messageRoles: ["user"] },
+        command.continuationAfterRunId === undefined
+          ? undefined
+          : {
+              messageRoles: ["user"],
+              turnItemTypes: ["user_message"],
+              turnItemStatuses: ["pending"],
+            },
       )
       .pipe(
         Effect.mapError(
@@ -6022,6 +6029,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         latest.status !== "completed" ||
         sourceProjection.messages.filter((message) => message.role === "user").length !==
           command.continuationMessageCount ||
+        sourceProjection.turnItems.some(
+          (item) =>
+            item.type === "user_message" &&
+            (item.inputIntent === "steer" || item.inputIntent === "promoted_queued_to_steer"),
+        ) ||
         command.continuationHandoff === undefined ||
         sourceProjection.providerThreads.some(
           (thread) => (thread.pendingBackgroundTasks?.length ?? 0) > 0,
