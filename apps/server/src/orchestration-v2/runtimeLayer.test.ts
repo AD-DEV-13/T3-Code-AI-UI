@@ -14512,7 +14512,7 @@ describe("subagent lifecycle cascade", () => {
       }).pipe(Effect.provide(layerTest)),
   );
 
-  it.effect("keeps an independent side-chat rearchive with a parent-derived ID", () =>
+  it.effect("keeps the child archived when its side chat rearchives with a parent-derived ID", () =>
     Effect.gen(function* () {
       const f = yield* fixture;
       const { side, child } = yield* f.sideChatWithChild();
@@ -14671,7 +14671,7 @@ describe("subagent lifecycle cascade", () => {
     }).pipe(Effect.provide(Layer.merge(layerTest, SqlitePersistence.layerMemory))),
   );
 
-  it.effect("rolls back a nested side-chat deletion with an occupied recovery effect ID", () =>
+  it.effect("rolls back direct archive and nested delete when their recovery ID is occupied", () =>
     Effect.gen(function* () {
       const f = yield* fixture;
       const side = ThreadId.make("side");
@@ -14709,10 +14709,9 @@ describe("subagent lifecycle cascade", () => {
   it.effect("restores only what a parent archive cascaded, through independent archives", () =>
     Effect.gen(function* () {
       const f = yield* fixture;
-      // An earlier independent archive whose ID matches the one the parent cascade derives.
+      // The newer direct archive has the same ID the parent cascade would derive.
+      yield* f.commit("archive");
       yield* f.run("archive", app, "archive:parent:subagent:app");
-      yield* f.drain;
-      yield* f.run("archive");
       yield* f.drain;
       const receipts = yield* Receipts.CommandReceiptStoreV2;
       const { archiveSourceCommandId: _source, ...legacy } = Option.getOrThrow(
@@ -14845,7 +14844,7 @@ describe("subagent lifecycle cascade", () => {
   );
 
   it.effect.each([
-    "late collision",
+    "fresh late rejection",
     "legacy deeper rejection",
     "legacy expired rejection",
     "legacy planning move",
@@ -14854,12 +14853,13 @@ describe("subagent lifecycle cascade", () => {
       const f = yield* fixture;
       yield* f.run("archive", app);
       yield* f.run("unarchive", grandchild);
+      yield* f.drain;
       const leaf = ThreadId.make("leaf");
       yield* f.set(leaf, {
         ...(scenario === "legacy planning move" ? { projectId: ProjectId.make("foreign") } : {}),
         lineage: {
           rootThreadId: parent,
-          parentThreadId: grandchild,
+          parentThreadId: scenario === "fresh late rejection" ? app : grandchild,
           relationshipToParent: "subagent",
         },
       });
@@ -14900,16 +14900,15 @@ describe("subagent lifecycle cascade", () => {
       const skippedId = CommandId.make("archive:parent:subagent:app");
       const receipts = yield* Receipts.CommandReceiptStoreV2;
       const created = Option.getOrThrow(yield* receipt("create:parent"));
-      const rejected = scenario !== "late collision";
       const collision = {
         ...created,
         commandId: skippedId,
-        threadId: rejected ? app : ThreadId.make("fork"),
-        status: rejected ? "rejected" : "accepted",
-        error: rejected ? "Earlier rejection." : null,
+        threadId: app,
+        status: "rejected",
+        error: "Earlier rejection.",
       } as const;
       yield* f.commit("archive");
-      if (scenario !== "late collision") {
+      if (scenario !== "fresh late rejection") {
         const sql = yield* SqlClient.SqlClient;
         yield* sql`
             UPDATE orchestration_v2_effect_outbox
@@ -15011,7 +15010,7 @@ describe("subagent lifecycle cascade", () => {
       );
       const committed = Option.getOrThrow(yield* receipt(childId));
       const { archiveSourceCommandId: _source, ...legacy } = committed;
-      const childReceipt = scenario === "late collision" ? committed : legacy;
+      const childReceipt = scenario === "fresh late rejection" ? committed : legacy;
       if (childReceipt === legacy) yield* receipts.upsert(legacy);
       const leafId = `${childId}:subagent:${leaf}`;
       if (scenario === "legacy deeper rejection") {
@@ -15044,6 +15043,10 @@ describe("subagent lifecycle cascade", () => {
       );
       assert.deepEqual(recoveredReceipt, legacy);
       assert.deepEqual(Option.getOrThrow(yield* receipt(skippedId)), collision);
+      if (scenario === "fresh late rejection") {
+        const resumed = Option.getOrThrow(yield* receipt(`${skippedId}:subagent:${leaf}`));
+        assert.include(resumed, { threadId: leaf, status: "accepted" });
+      }
       if (scenario === "legacy deeper rejection") {
         assert.equal(recoveredSource, "archive:parent");
         assert.equal(yield* f.archived(deepest), "1");
