@@ -2478,6 +2478,8 @@ describe("PreviewManager", () => {
         const manager = yield* PreviewManager.PreviewManager;
         yield* manager.setMainWindow({
           isDestroyed: () => false,
+          isVisible: () => false,
+          isMinimized: () => false,
           once: vi.fn(),
           webContents: mainWebContents,
         } as never);
