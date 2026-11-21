@@ -14418,11 +14418,24 @@ describe("subagent lifecycle cascade", () => {
         });
       }
       yield* f.run("archive", independent);
+      const latestSide = ThreadId.make("side-restored-later");
+      const latestChild = ThreadId.make("side-restored-later-child");
+      yield* f.sideChat(app, latestSide);
+      yield* f.set(latestChild, {
+        lineage: {
+          rootThreadId: parent,
+          parentThreadId: latestSide,
+          relationshipToParent: "subagent",
+        },
+      });
+      yield* f.run("archive", latestSide);
+      yield* f.run("unarchive", latestChild);
       yield* f.run("archive", restored);
       yield* f.commit("archive");
       yield* f.run("unarchive", restored);
+      yield* f.run("unarchive", latestSide);
       yield* f.drain;
-      assert.equal(yield* f.archived(side, child, independent, restored), "1110");
+      assert.equal(yield* f.archived(side, child, independent, restored, latestChild), "11100");
       yield* TestClock.adjust("8 days");
       assert.isAbove(yield* f.outbox.pruneSettled, 0);
       const generatedId = "archive:parent:subagent:app:side-chat:side";
@@ -14461,13 +14474,18 @@ describe("subagent lifecycle cascade", () => {
         error: "Earlier rejected command.",
       } as const;
       yield* Effect.flatMap(Receipts.CommandReceiptStoreV2, (r) => r.upsert(occupied));
+      const events = yield* EventSink.EventSinkV2;
+      const sequence = yield* events.latestSequence();
       const denied = yield* f.run("unarchive").pipe(Effect.flip);
+      assert.equal(yield* events.latestSequence(), sequence);
       assert.equal(denied._tag, "OrchestratorDispatchError");
       assert.equal(yield* f.archived(parent, side, child), "111");
       assert.deepEqual(Option.getOrThrow(yield* receipt(occupied.commandId)), occupied);
       assert.isTrue(Option.isNone(yield* receipt(commandId)));
       assert.isTrue(
-        Option.isNone(yield* f.outbox.get("effect:unarchive:parent:subagent-threads.cascade")),
+        Option.isNone(
+          yield* f.outbox.get("effect:unarchive:parent:side-chat:side:subagent-threads.cascade"),
+        ),
       );
     }).pipe(Effect.provide(layerTest)),
   );
@@ -14561,10 +14579,12 @@ describe("subagent lifecycle cascade", () => {
       const directId = CommandId.make(`${closeId}:side-chat:${side}`);
       yield* f.commit("delete", side, directId);
       const sql = yield* SqlClient.SqlClient;
-      yield* sql`
+      const pruned = yield* sql`
         DELETE FROM orchestration_events
         WHERE command_id = 'delete:parent' AND stream_id = ${side} AND event_type = 'thread.deleted'
+        RETURNING sequence
       `;
+      assert.lengthOf(pruned, 1);
       yield* f.threads.cascadeSubagentLifecycle({
         threadId: side,
         commandId,
@@ -15117,9 +15137,16 @@ describe("subagent lifecycle cascade", () => {
       const f = yield* fixture;
       const receipts = yield* Receipts.CommandReceiptStoreV2;
       const created = Option.getOrThrow(yield* receipt("create:parent"));
-      for (let retry = 0; retry < 32; retry++) {
-        const id = CommandId.make(`archive:parent:subagent:app${retry ? `:retry:${retry}` : ""}`);
-        yield* receipts.upsert({ ...created, commandId: id, threadId: app, status: "rejected" });
+      for (const [threadId, slots] of [
+        [native, 31],
+        [app, 32],
+      ] as const) {
+        for (let retry = 0; retry < slots; retry++) {
+          const id = CommandId.make(
+            `archive:parent:subagent:${threadId}${retry ? `:retry:${retry}` : ""}`,
+          );
+          yield* receipts.upsert({ ...created, commandId: id, threadId, status: "rejected" });
+        }
       }
       yield* f.run("archive");
       yield* f.drain;
@@ -15127,6 +15154,8 @@ describe("subagent lifecycle cascade", () => {
       assert.deepEqual([status, attemptCount], ["pending", 1]);
       assert.include(lastError, "All 32 subagent lifecycle command IDs were occupied or rejected.");
       assert.equal(yield* f.archived(native, app, grandchild), "100");
+      const accepted = Option.getOrThrow(yield* receipt("archive:parent:subagent:native:retry:31"));
+      assert.include(accepted, { threadId: native, status: "accepted" });
       assert.isTrue(Option.isNone(yield* receipt("archive:parent:subagent:app:retry:32")));
     }).pipe(Effect.provide(layerTest)),
   );
