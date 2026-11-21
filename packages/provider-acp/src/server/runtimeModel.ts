@@ -1287,6 +1287,42 @@ export function withTrackedPermissionToolCall(
   };
 }
 
+export interface AcpChildRequestTarget {
+  readonly childSessionId: string;
+  readonly toolCallId: string | null;
+  readonly workerLabel: string | null;
+}
+
+export function extractAcpChildRequestTarget(input: {
+  readonly meta?: unknown;
+  readonly toolCallMeta?: unknown;
+  readonly fallbackToolCallId?: string | undefined;
+}): AcpChildRequestTarget | undefined {
+  for (const candidate of [input.meta, input.toolCallMeta]) {
+    if (!isRecord(candidate)) continue;
+    const ag = candidate.antigravity;
+    if (!isRecord(ag)) continue;
+    const swarm = isRecord(ag.swarm) ? ag.swarm : undefined;
+    const childSessionId =
+      (typeof ag.childSessionId === "string" && ag.childSessionId.trim()) ||
+      (typeof swarm?.workerSessionId === "string" && swarm.workerSessionId.trim()) ||
+      "";
+    if (childSessionId.length === 0) continue;
+    const toolCallId =
+      (typeof ag.workerToolCallId === "string" && ag.workerToolCallId.trim()) ||
+      (typeof input.fallbackToolCallId === "string" && input.fallbackToolCallId.trim()) ||
+      null;
+    const workerName =
+      (typeof swarm?.workerName === "string" && swarm.workerName.trim().replace(/^@/, "")) ||
+      (typeof ag.agentName === "string" && ag.agentName.trim().replace(/^@/, "")) ||
+      "";
+    const role = typeof ag.role === "string" ? ag.role.trim() : "";
+    const workerLabel = workerName.length > 0 ? `@${workerName}` : role.length > 0 ? role : null;
+    return { childSessionId, toolCallId, workerLabel };
+  }
+  return undefined;
+}
+
 export function parsePermissionRequest(
   params: EffectAcpSchema.RequestPermissionRequest,
 ): AcpPermissionRequest {
@@ -1300,15 +1336,34 @@ export function parsePermissionRequest(
       rawOutput: params.toolCall.rawOutput,
       content: params.toolCall.content,
       locations: params.toolCall.locations,
+      _meta: params.toolCall._meta,
     },
     { fallbackStatus: "pending" },
   );
   const kind = normalizeToolKind(params.toolCall.kind) ?? "unknown";
-  const detail =
+  const childTarget = extractAcpChildRequestTarget({
+    meta: params._meta,
+    toolCallMeta: params.toolCall._meta,
+    fallbackToolCallId: params.toolCall.toolCallId,
+  });
+  const rawCommandLine =
+    isRecord(params.toolCall.rawInput) && typeof params.toolCall.rawInput.CommandLine === "string"
+      ? params.toolCall.rawInput.CommandLine.trim() || undefined
+      : undefined;
+  const baseDetail =
     toolCall?.command ??
+    rawCommandLine ??
     toolCall?.title ??
     toolCall?.detail ??
     (typeof params.sessionId === "string" ? `Session ${params.sessionId}` : undefined);
+  const actorPrefix =
+    childTarget?.workerLabel !== null && childTarget?.workerLabel !== undefined
+      ? `[${childTarget.workerLabel}] `
+      : undefined;
+  const detail =
+    baseDetail !== undefined && actorPrefix !== undefined && !baseDetail.startsWith(actorPrefix)
+      ? `${actorPrefix}${baseDetail}`
+      : baseDetail;
   return {
     kind,
     ...(detail ? { detail } : {}),
