@@ -333,6 +333,7 @@ import { NoActiveThreadState } from "./NoActiveThreadState";
 import {
   resolveEffectiveEnvMode,
   resolveLocalCheckoutBranchMismatch,
+  resolveWorkspaceMode,
   shouldShowComposerContextStrip,
   shouldShowEnvironmentIndicator,
 } from "./BranchToolbar.logic";
@@ -397,6 +398,7 @@ import { ChatTerminalDrawers } from "./chat/ChatTerminalDrawers";
 import { ChatRightPanel } from "./chat/ChatRightPanel";
 import { useDraftEnvironmentRouting } from "./chat/useDraftEnvironmentRouting";
 import { branchMismatchBannerItem, extensionStatusBannerItem } from "./chat/ThreadActivityBanners";
+import { useWorkspaceModeNoticeBanner } from "./chat/useWorkspaceModeNoticeBanner";
 import { ThreadNow } from "./chat/ThreadNow";
 import { threadRuntimeIsActive, type ThreadStructure } from "@t3tools/client-runtime/state/shell";
 import { useDelayedStatus } from "../hooks/useDelayedStatus";
@@ -762,6 +764,7 @@ export default function ChatView(props: ChatViewProps) {
   const [pendingServerThreadEnvModeEntry, setPendingServerThreadEnvModeEntry] = useState<{
     readonly threadId: ThreadId;
     readonly mode: DraftThreadEnvMode;
+    readonly checkoutBranch: boolean;
   } | null>(null);
   const [pendingServerThreadBranchEntry, setPendingServerThreadBranchEntry] = useState<{
     readonly threadId: ThreadId;
@@ -2342,6 +2345,13 @@ export default function ChatView(props: ChatViewProps) {
     canOverrideServerThreadEnvMode && pendingServerThreadBranchEntryForThread !== null
       ? pendingServerThreadBranchEntryForThread.branch
       : (activeThread?.branch ?? null);
+  const checkoutBranch =
+    envMode === "worktree" &&
+    (isLocalDraftThread
+      ? (draftThread?.checkoutBranch ?? false)
+      : canOverrideServerThreadEnvMode &&
+        pendingServerThreadEnvModeEntry?.threadId === activeThread?.id &&
+        pendingServerThreadEnvModeEntry?.checkoutBranch === true);
   const startFromOrigin = isLocalDraftThread
     ? (draftThread?.startFromOrigin ?? false)
     : canOverrideServerThreadEnvMode
@@ -3035,7 +3045,7 @@ export default function ChatView(props: ChatViewProps) {
   const {
     getModelDisabledReason,
     handleRuntimeModeChangeStable,
-    onEnvModeChangeStable,
+    onWorkspaceModeChangeStable,
     onProviderModelSelectStable,
     onStartFromOriginChange,
     openProviderSetupStable,
@@ -3058,6 +3068,24 @@ export default function ChatView(props: ChatViewProps) {
     setPendingServerThreadStartFromOriginByThreadId,
     scheduleComposerFocus: scheduleComposerFocusStable,
   });
+  const workspaceModeNoticeItem = useWorkspaceModeNoticeBanner({
+    enabled:
+      isGitRepo &&
+      multipleModelSelections === null &&
+      activeWorktreePath === null &&
+      (isLocalDraftThread || canOverrideServerThreadEnvMode),
+    environmentId,
+    projectRef: activeProjectRef,
+    projectRoot: activeProject?.workspaceRoot ?? null,
+    threadId,
+    mode: resolveWorkspaceMode({ envMode, activeWorktreePath, checkoutBranch }),
+    branch: activeThreadBranch,
+    onWorkspaceModeChange: onWorkspaceModeChangeStable,
+  });
+  const visibleComposerBannerItems =
+    workspaceModeNoticeItem === null
+      ? composerBannerItems
+      : [...composerBannerItems, workspaceModeNoticeItem];
   const { onResume, isResuming } = useComposerResume({
     environmentId,
     routeThreadKey,
@@ -3099,6 +3127,7 @@ export default function ChatView(props: ChatViewProps) {
     sendEnvMode,
     worktreeRepositories,
     startFromOrigin,
+    checkoutBranch,
     localCheckoutBranchMismatch,
     logicalProjectEnvironments,
     providerInstanceEntries,
@@ -3263,7 +3292,11 @@ export default function ChatView(props: ChatViewProps) {
       return;
     }
     if (sendEnvMode !== "local") {
-      setDraftThreadContext(composerDraftTarget, { envMode: "local", startFromOrigin: false });
+      setDraftThreadContext(composerDraftTarget, {
+        envMode: "local",
+        startFromOrigin: false,
+        checkoutBranch: false,
+      });
       return;
     }
     resendAfterWorkLocallyStable();
@@ -3853,9 +3886,9 @@ export default function ChatView(props: ChatViewProps) {
                                 }
                                 isPreparingWorktree={isPreparingWorktree && !sendQueuesBehindSetup}
                                 bannerItems={
-                                  isDraftHeroState || composerBannerItems.length === 0
+                                  isDraftHeroState || visibleComposerBannerItems.length === 0
                                     ? EMPTY_COMPOSER_BANNER_ITEMS
-                                    : composerBannerItems
+                                    : visibleComposerBannerItems
                                 }
                                 resumeCompactionTokens={resumeCompactionTokens}
                                 keepFullHistory={keepFullHistory}
@@ -3973,7 +4006,8 @@ export default function ChatView(props: ChatViewProps) {
                                   }
                                   showBranchControls={isGitRepo}
                                   {...(routeKind === "draft" && draftId ? { draftId } : {})}
-                                  onEnvModeChange={onEnvModeChangeStable}
+                                  onWorkspaceModeChange={onWorkspaceModeChangeStable}
+                                  checkoutBranch={checkoutBranch}
                                   startFromOrigin={startFromOrigin}
                                   onStartFromOriginChange={onStartFromOriginChange}
                                   envMode={envMode}
@@ -4022,12 +4056,12 @@ export default function ChatView(props: ChatViewProps) {
                           </div>
                         </div>
                       </ComposerSurface.Shell>
-                      {isDraftHeroState && composerBannerItems.length > 0 ? (
+                      {isDraftHeroState && visibleComposerBannerItems.length > 0 ? (
                         // Out of flow, like the headline, so a notice never moves the centered composer.
                         // Short windows pin the composer to the bottom, where an out-of-flow notice
                         // would fall off-screen, so there it takes space and lifts the composer.
                         <div className="absolute inset-x-0 top-full flex flex-col gap-1 pt-4 [@media(max-height:34rem)]:static">
-                          <ComposerBannerStack items={composerBannerItems} detached />
+                          <ComposerBannerStack items={visibleComposerBannerItems} detached />
                         </div>
                       ) : null}
                     </div>
@@ -4103,7 +4137,8 @@ export default function ChatView(props: ChatViewProps) {
                   {...(canChangeEnvironment
                     ? { onEnvironmentChange: onEnvironmentChangeStable }
                     : {})}
-                  onEnvModeChange={onEnvModeChangeStable}
+                  onWorkspaceModeChange={onWorkspaceModeChangeStable}
+                  checkoutBranch={checkoutBranch}
                   envMode={envMode}
                   {...(canOverrideServerThreadEnvMode
                     ? {
