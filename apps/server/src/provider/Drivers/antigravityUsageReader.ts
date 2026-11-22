@@ -130,9 +130,9 @@ const MODEL_IDS: Record<number, string> = {
 };
 
 // Effort and routing variants share the base model's price; they can stack, as in -tiered-high.
-export const antigravityRateModel = (model: string) => {
+export const antigravityRateModel = (model: string): string => {
   const base = model.replace(
-    /(?:-(?:extra-low|low|medium|high|tiered|control|thinking|agent|orchestrator))+$/,
+    /-(?:extra-low|low|medium|high|tiered|control|thinking|agent|orchestrator)$/,
     "",
   );
   return /^gemini-3-flash-(?:agent(?:-[ab])?|[ab])$/.test(model)
@@ -145,7 +145,9 @@ export const antigravityRateModel = (model: string) => {
           ? "gemini-4-argon"
           : base === "gemini-3-flash"
             ? "gemini-3-flash-preview"
-            : base;
+            : base === model
+              ? base
+              : antigravityRateModel(base);
 };
 
 function withRateModel(record: UsageRecord): UsageRecord {
