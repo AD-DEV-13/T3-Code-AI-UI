@@ -127,6 +127,7 @@ function ReviewHeader(
                         props.sectionMenu.workingTree,
                         gt("Uncommitted", { $context: "diff section: working tree" }),
                       ),
+                      sectionAction(props.sectionMenu.unstaged, gt("Unstaged")),
                       sectionAction(props.sectionMenu.latestTurn, gt("Latest turn")),
                     ],
                   },

@@ -11,14 +11,15 @@ import { msg } from "gt-react-native";
 
 import { m, type MessageResolver } from "../../i18n/messages";
 
-export type ReviewSectionKind = "turn" | "working-tree" | "branch-range";
+export type ReviewSectionKind = "turn" | "working-tree" | "unstaged" | "branch-range";
 export type ReviewGitSectionKind = Exclude<ReviewSectionKind, "turn">;
 type ReviewGitSource = ReviewDiffPreviewSource & { readonly kind: ReviewGitSectionKind };
 
 const CHANGES_SECTION_ID = "git:branch-range";
-const GIT_SECTION_KINDS = ["working-tree", "branch-range"] as const;
+const GIT_SECTION_KINDS = ["working-tree", "unstaged", "branch-range"] as const;
 const GIT_PLACEHOLDER_TITLES = {
   "working-tree": msg("Uncommitted", { $context: "diff section: working tree" }),
+  unstaged: msg("Unstaged"),
   "branch-range": msg("Changes", { $context: "diff section: branch changes" }),
 } as const satisfies Record<ReviewGitSectionKind, unknown>;
 const UNCOMMITTED_SUBTITLE = msg("Staged, unstaged, and untracked files");
@@ -187,6 +188,9 @@ const readyCheckpointOrder = Order.make<ThreadCheckpointSummary>(
 function gitSubtitle(section: ReviewDiffPreviewSource, resolve: MessageResolver): string | null {
   if (section.kind === "working-tree") {
     return resolve(UNCOMMITTED_SUBTITLE);
+  }
+  if (section.kind === "unstaged") {
+    return resolve(msg("Unstaged and untracked files"));
   }
   if (section.baseRef) {
     return `${section.baseRef} ... ${section.headRef ?? "HEAD"}`;
@@ -609,7 +613,7 @@ export function buildReviewSectionItems(input: {
         {
           id: `git:${kind}`,
           kind,
-          title: section.title,
+          title: kind === "unstaged" ? resolve(GIT_PLACEHOLDER_TITLES.unstaged) : section.title,
           subtitle: gitSubtitle(section, resolve),
           diff: section.diff,
           source: section,

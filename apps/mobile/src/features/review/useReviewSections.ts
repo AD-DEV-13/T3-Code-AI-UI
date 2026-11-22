@@ -70,6 +70,7 @@ export function useReviewSections(input: {
         })
       : null;
   const workingTreePreview = useEnvironmentQuery(diffPreviewQuery("working-tree"));
+  const unstagedPreview = useEnvironmentQuery(diffPreviewQuery("unstaged"));
   const branchPreview = useEnvironmentQuery(diffPreviewQuery("branch-range"));
   const lastGitSections = useAtomValue(
     environmentId !== undefined && selectedThreadCwd !== null
@@ -80,6 +81,7 @@ export function useReviewSections(input: {
   const gitSections = (
     [
       ["working-tree", workingTreePreview],
+      ["unstaged", unstagedPreview],
       ["branch-range", branchPreview],
     ] as const
   ).flatMap(([kind, preview]) =>
@@ -109,6 +111,7 @@ export function useReviewSections(input: {
     turnDiffById: reviewTurnDiffsBySectionId(readyCheckpoints, lastTurnDiffs),
     gitSectionStates: {
       "working-tree": gitSectionState(fileAccess.isPending, workingTreePreview),
+      unstaged: gitSectionState(fileAccess.isPending, unstagedPreview),
       "branch-range": gitSectionState(fileAccess.isPending, branchPreview),
     },
     ...(selectedThreadProject ? { rootName: selectedThreadProject.title } : {}),
@@ -158,9 +161,11 @@ export function useReviewSections(input: {
   const selectedGitPreview =
     selectedSection?.kind === "working-tree"
       ? workingTreePreview
-      : selectedSection?.kind === "branch-range"
-        ? branchPreview
-        : null;
+      : selectedSection?.kind === "unstaged"
+        ? unstagedPreview
+        : selectedSection?.kind === "branch-range"
+          ? branchPreview
+          : null;
 
   const refreshSelectedSection = async () => {
     if (!enabled) {
@@ -174,6 +179,7 @@ export function useReviewSections(input: {
       selectedGitPreview.refresh();
     } else {
       workingTreePreview.refresh();
+      unstagedPreview.refresh();
       branchPreview.refresh();
     }
   };

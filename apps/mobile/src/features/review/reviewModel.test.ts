@@ -68,7 +68,7 @@ describe("buildReviewSectionItems", () => {
       ],
       gitSections: [],
       turnDiffById: {},
-      gitSectionStates: { "working-tree": null, "branch-range": null },
+      gitSectionStates: { "working-tree": null, unstaged: null, "branch-range": null },
     });
 
     expect(sections).toMatchObject([
@@ -358,7 +358,7 @@ describe("buildReviewParsedDiff", () => {
 
 describe("buildReviewSectionItems", () => {
   it("keeps a failed or loading git source selectable beside the other one", () => {
-    const source = (kind: "working-tree" | "branch-range") => ({
+    const source = (kind: "working-tree" | "unstaged" | "branch-range") => ({
       id: kind,
       kind,
       title: kind === "working-tree" ? "Uncommitted" : "Changes",
@@ -380,13 +380,22 @@ describe("buildReviewSectionItems", () => {
       }).map((section) => [section.id, section.diff === null, section.isLoading]);
 
     expect(
-      build([source("working-tree")], { "working-tree": null, "branch-range": "failed" }),
+      build([source("working-tree"), source("unstaged")], {
+        "working-tree": null,
+        unstaged: null,
+        "branch-range": "failed",
+      }),
     ).toEqual([
       ["git:working-tree", false, false],
+      ["git:unstaged", false, false],
       ["git:branch-range", true, false],
     ]);
     expect(
-      build([source("branch-range")], { "working-tree": "loading", "branch-range": null }),
+      build([source("branch-range")], {
+        "working-tree": "loading",
+        unstaged: null,
+        "branch-range": null,
+      }),
     ).toEqual([
       ["git:working-tree", true, true],
       ["git:branch-range", false, false],

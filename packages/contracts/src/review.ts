@@ -24,7 +24,7 @@ export const ReviewDiffPreviewInput = Schema.Struct({
   mergeBase: Schema.optionalKey(ReviewMergeBase),
   commitSha: Schema.optional(TrimmedNonEmptyString),
   ignoreWhitespace: Schema.optionalKey(Schema.Boolean),
-  sourceKind: Schema.optionalKey(Schema.Literals(["working-tree", "branch-range"])),
+  sourceKind: Schema.optionalKey(Schema.Literals(["working-tree", "unstaged", "branch-range"])),
   trackedOnly: Schema.optionalKey(Schema.Boolean),
   /** From a trackedOnly result, so the complete read adds only the untracked files. */
   completionToken: Schema.optionalKey(Schema.String),
@@ -33,7 +33,7 @@ export const ReviewDiffPreviewInput = Schema.Struct({
     Schema.Struct({
       path: Schema.NonEmptyString,
       previousPath: Schema.NullOr(Schema.NonEmptyString),
-      sourceKind: Schema.Literals(["working-tree", "branch-range", "commit"]),
+      sourceKind: Schema.Literals(["working-tree", "unstaged", "branch-range", "commit"]),
       // The preview's change type; the server still confirms a tracked path before relying on it.
       changeType: Schema.optionalKey(ReviewDiffChangeType),
     }),
@@ -61,6 +61,7 @@ export type ReviewBranchCommitsResult = typeof ReviewBranchCommitsResult.Type;
 
 export const ReviewDiffPreviewSourceKind = Schema.Literals([
   "working-tree",
+  "unstaged",
   "branch-range",
   "commit",
 ]);
