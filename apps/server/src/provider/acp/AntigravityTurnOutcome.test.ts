@@ -60,6 +60,17 @@ const STATUS_NOT_FOUND_ERROR = Buffer.concat([
     'NOT_FOUND (code 404): Requested entity was not found.\u001a\u0080\u0001HTTP 404 Not Found\n\n{"error":{"code":404,"message":"Requested entity was not found.","status":"NOT_FOUND"}}',
   ),
 ]);
+const UNAUTHENTICATED_MESSAGE =
+  "Request had invalid authentication credentials. Expected OAuth 2 access token, login cookie or other valid authentication credential. See https://developers.google.com/identity/sign-in/web/devconsole-project.";
+const UNAUTHENTICATED_ERROR = errorPayload(
+  `Error 401, Message: ${UNAUTHENTICATED_MESSAGE}, Status: UNAUTHENTICATED, Details: []`,
+);
+const STATUS_UNAUTHENTICATED_ERROR = Buffer.concat([
+  Buffer.from([0x12, 0xec, 0x01]),
+  Buffer.from(
+    `UNAUTHENTICATED (code 401): ${UNAUTHENTICATED_MESSAGE}\u001a\u0098\u0005HTTP 401 Unauthorized\n\n{"error":{"code":401,"message":"${UNAUTHENTICATED_MESSAGE}","status":"UNAUTHENTICATED"}}`,
+  ),
+]);
 // The model's reply quoting the agent's quota notice is an ordinary planner response.
 const QUOTED_NOTICE = Buffer.from(
   "Usage Limit Reached\n\nYou have reached your current quota for this period. Your limit will reset in 1 hour.",
@@ -221,6 +232,39 @@ describe("watchAntigravityPromptOutcome", () => {
           [ERROR_MESSAGE, STATUS_NOT_FOUND_ERROR],
         ]))?.failure.retryable,
         false,
+      );
+      // A 401 after the turn already reached the model is a transient OAuth refresh race.
+      for (const error of [UNAUTHENTICATED_ERROR, STATUS_UNAUTHENTICATED_ERROR]) {
+        assert.deepEqual(
+          yield* turn([
+            [USER_INPUT, input],
+            [PLANNER_RESPONSE, reply],
+            [TOOL, reply],
+            [ERROR_MESSAGE, error],
+          ]),
+          {
+            ...reusable({
+              class: "provider_error",
+              message: UNAUTHENTICATED_MESSAGE,
+              code: "UNAUTHENTICATED",
+              retryable: true,
+            }),
+            resumeWith: "continue",
+          },
+        );
+      }
+      // A 401 before the model answered is an unauthenticated session, not a mid-turn refresh race.
+      assert.deepEqual(
+        yield* turn([
+          [USER_INPUT, input],
+          [ERROR_MESSAGE, STATUS_UNAUTHENTICATED_ERROR],
+        ]),
+        reusable({
+          class: "provider_error",
+          message: UNAUTHENTICATED_MESSAGE,
+          code: "UNAUTHENTICATED",
+          retryable: false,
+        }),
       );
       // A saved thinking block without a valid signature fails every later prompt.
       for (const error of [MISSING_SIGNATURE_ERROR, INVALID_SIGNATURE_ERROR]) {
