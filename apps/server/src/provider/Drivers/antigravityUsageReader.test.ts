@@ -386,6 +386,7 @@ describe("readAntigravityUsage", () => {
             "gemini-pro-orchestrator-neon",
             "gemini-4-hydrogen-orchestrator",
             "gemini-pro-orchestrator-g1-pro",
+            "gemini-4-hydrogen-tiered-high",
           ].entries()) {
             yield* db.run("INSERT INTO gen_metadata VALUES (?, ?)", [
               idx,
@@ -416,6 +417,7 @@ describe("readAntigravityUsage", () => {
           ["gemini-pro-orchestrator-neon", "gemini-4-neon"],
           ["gemini-4-hydrogen-orchestrator", "gemini-4-hydrogen"],
           ["gemini-pro-orchestrator-g1-pro", "gemini-4-argon"],
+          ["gemini-4-hydrogen-tiered-high", "gemini-4-hydrogen"],
           ["gemini-pro-orchestrator-neon", "gemini-4-neon"],
         ],
       );
