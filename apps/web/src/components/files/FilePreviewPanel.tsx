@@ -20,6 +20,7 @@ import {
   isWorkspaceImagePreviewPath,
   isWorkspaceFontPreviewPath,
   isWorkspaceVideoPreviewPath,
+  modelPreviewKind,
   officePreviewKind,
   binaryPreviewKind,
 } from "@t3tools/shared/filePreview";
@@ -94,6 +95,7 @@ import { useAtomQueryRunner } from "~/state/use-atom-query-runner";
 
 import { AttachmentFilePreview } from "./AttachmentFilePreview";
 import { AudioPreview } from "./AudioPreview";
+import { BlenderFilePreview } from "./BlenderFilePreview";
 import { BrowserDocumentFrame, isPdfPreviewFile } from "./BrowserDocumentFrame";
 import { DelimitedTablePreview } from "./DelimitedTablePreview";
 import { PreviewImage } from "./PreviewImage";
@@ -522,6 +524,8 @@ function WorkspaceDocumentPreview(props: {
   readonly absolutePath: string;
   readonly workspaceRoot: string;
   readonly name: string;
+  readonly linkPath: string;
+  readonly composerDraftTarget: ScopedThreadRef | DraftId;
   readonly workspaceMutationId: string | null;
   readonly refreshRevision: number;
 }) {
@@ -569,6 +573,9 @@ function WorkspaceDocumentPreview(props: {
       sizeBytes={0}
       asset={{ environmentId: props.environmentId, resource }}
       origin={gt("File", { $context: "label for a file opened from the workspace" })}
+      composerDraftTarget={props.composerDraftTarget}
+      modelLinkPath={props.linkPath}
+      threadRef={props.threadRef}
     />
   );
 }
@@ -1315,11 +1322,20 @@ export default function FilePreviewPanel({
   const isAudio = relativePath !== null && !isVideo && isWorkspaceAudioPreviewPath(relativePath);
   const isImage = relativePath !== null && !isVideo && isWorkspaceImagePreviewPath(relativePath);
   const isMedia = isImage || isVideo || isAudio;
+  // A thread's own scene; Blender's setting decides whether it previews or says how to turn it on.
+  const isBlenderScene =
+    !draft &&
+    attachment === undefined &&
+    relativePath !== null &&
+    !isHostPath(relativePath) &&
+    relativePath.toLowerCase().endsWith(".blend");
   const isPdf = relativePath !== null && isPdfPreviewFile(relativePath);
   const isDocument =
     relativePath !== null &&
     (binaryPreviewKind({ name: relativePath }) !== null ||
+      isBlenderScene ||
       officePreviewKind({ name: relativePath }) !== null ||
+      modelPreviewKind({ name: relativePath }) !== null ||
       isWorkspaceFontPreviewPath(relativePath));
   const isHtml = relativePath !== null && !isPdf && isBrowserPreviewFile(relativePath);
   const isHostFile =
@@ -1744,6 +1760,16 @@ export default function FilePreviewPanel({
               asset={{ environmentId, attachmentId: attachment.id }}
               htmlRender={attachment.htmlRender === true}
               threadRef={threadRef}
+              composerDraftTarget={composerDraftTarget}
+            />
+          ) : relativePath && isBlenderScene && canReadFiles ? (
+            <BlenderFilePreview
+              key={JSON.stringify([environmentId, threadRef.threadId, relativePath])}
+              thread={threadRef}
+              path={relativePath}
+              workspaceRoot={cwd}
+              enabled={serverConfig ? serverConfig.settings.blender.enabled : null}
+              workspaceMutationId={workspaceMutationId}
             />
           ) : relativePath && isVideo && absolutePath ? (
             <WorkspaceVideoPreview
@@ -1821,6 +1847,8 @@ export default function FilePreviewPanel({
               absolutePath={absolutePath}
               workspaceRoot={cwd}
               name={relativePath.split(/[\\/]/).at(-1) || relativePath}
+              linkPath={relativePath}
+              composerDraftTarget={composerDraftTarget}
               workspaceMutationId={workspaceMutationId}
               refreshRevision={fileRefreshRevision}
             />
