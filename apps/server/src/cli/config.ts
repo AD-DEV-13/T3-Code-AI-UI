@@ -396,6 +396,7 @@ export const resolveServerConfig = Effect.fn("config.resolveServerConfig")(funct
   const desktopAppUpdate = bootstrap?.desktopAppUpdate;
   const desktopBrowserFd = bootstrap?.desktopBrowserFd;
   const desktopBrowserControlFd = bootstrap?.desktopBrowserControlFd;
+  const desktopBrowserSocketSecret = bootstrap?.desktopBrowserSocketSecret;
   const resourceMonitorPath = bootstrap?.resourceMonitorPath;
   const autoBootstrapProjectFromCwd = Option.getOrElse(
     resolveOptionPrecedence(
@@ -530,6 +531,7 @@ export const resolveServerConfig = Effect.fn("config.resolveServerConfig")(funct
     ...(desktopAppUpdate === undefined ? {} : { desktopAppUpdate }),
     desktopBrowserFd,
     desktopBrowserControlFd,
+    ...(desktopBrowserSocketSecret === undefined ? {} : { desktopBrowserSocketSecret }),
     resourceMonitorPath,
     autoBootstrapProjectFromCwd,
     logWebSocketEvents,
