@@ -423,6 +423,16 @@ describe("readAntigravityUsage", () => {
           ["gemini-pro-orchestrator-neon", "gemini-4-neon"],
         ],
       );
+      const table = parseRateTable({
+        "gemini-4-hydrogen": { input_cost_per_token: 1e-6, output_cost_per_token: 4e-6 },
+      });
+      const hydrogen = records(result).find(
+        ({ model }) => model === "gemini-4-hydrogen-tiered-high",
+      );
+      assert.ok(hydrogen);
+      const priced = priceUsage(table, hydrogen);
+      assert.strictEqual(priced.costSource, "modelPriced");
+      assert.closeTo(priced.costUsd, 19e-6, 1e-12);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
