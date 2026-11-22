@@ -21,6 +21,156 @@ import type { ThreadStructure, ThreadStructureTurnItem } from "./models.ts";
 // Fallback TTL: Claude's 1h cache plus slack.
 const CLAUDE_RESUME_COMPACTION_FALLBACK_MS = 70 * 60_000;
 
+/** Absolute context size above which even 1M-window threads warn before pricey cache misses. */
+export const CONTEXT_USAGE_WARNING_TOKENS = 150_000;
+
+export type ContextUsageTone = "error" | "warning" | null;
+
+export interface ThreadCacheMetrics {
+  /** Cumulative prompt-cache hit ratio (0..1) across observed turns on the active provider thread. */
+  readonly threadHitRate: number;
+  /** Prompt-cache hit ratio (0..1) on the latest observed turn. */
+  readonly lastTurnHitRate: number;
+  readonly totalInputTokens: number;
+  readonly cachedInputTokens: number;
+  readonly uncachedInputTokens: number;
+  readonly lastTurnInputTokens: number;
+  readonly lastTurnCachedInputTokens: number;
+  readonly turnCount: number;
+}
+
+export function deriveContextUsageTone(input: {
+  readonly usedTokens: number;
+  readonly usedPercentage: number | null;
+}): ContextUsageTone {
+  if (input.usedPercentage !== null && input.usedPercentage >= 90) return "error";
+  if (
+    (input.usedPercentage !== null && input.usedPercentage >= 80) ||
+    input.usedTokens >= CONTEXT_USAGE_WARNING_TOKENS
+  ) {
+    return "warning";
+  }
+  return null;
+}
+
+function clampCachedTokens(cached: number, input: number): number {
+  if (!Number.isFinite(cached) || cached <= 0) return 0;
+  return Math.min(cached, input);
+}
+
+/**
+ * Derives cumulative and last-turn prompt cache hit metrics for the active provider thread from
+ * completed turn token usage (falling back to live/thread snapshots when per-turn counters lack
+ * cache fields). Returns null when the provider has not reported cache telemetry.
+ */
+export function deriveThreadCacheMetrics(
+  turns: ReadonlyArray<
+    Pick<OrchestrationV2ProviderTurn, "providerThreadId" | "ordinal" | "turnTokenUsage">
+  >,
+  providerThread?: Pick<OrchestrationV2ProviderThread, "id" | "contextUsage"> | null,
+  liveUsage?: Pick<
+    OrchestrationV2ProviderTurnTokenUsage,
+    "inputTokens" | "cachedInputTokens"
+  > | null,
+): ThreadCacheMetrics | null {
+  const eligible = turns
+    .map((turn, index) => ({ turn, index }))
+    .filter(({ turn }) => {
+      if (providerThread != null && turn.providerThreadId !== providerThread.id) return false;
+      const usage = turn.turnTokenUsage;
+      return (
+        usage !== undefined &&
+        usage.localCommand !== true &&
+        typeof usage.inputTokens === "number" &&
+        Number.isFinite(usage.inputTokens) &&
+        usage.inputTokens > 0
+      );
+    })
+    .sort((left, right) => left.turn.ordinal - right.turn.ordinal || left.index - right.index);
+
+  const cacheEligible = eligible.filter(({ turn }) => {
+    const cached = turn.turnTokenUsage?.cachedInputTokens;
+    return typeof cached === "number" && Number.isFinite(cached);
+  });
+
+  if (cacheEligible.length > 0) {
+    let totalInputTokens = 0;
+    let cachedInputTokens = 0;
+    let lastTurnInputTokens = 0;
+    let lastTurnCachedInputTokens = 0;
+
+    for (const { turn } of cacheEligible) {
+      const usage = turn.turnTokenUsage!;
+      const inputTokens = usage.inputTokens!;
+      const cached = clampCachedTokens(usage.cachedInputTokens!, inputTokens);
+      totalInputTokens += inputTokens;
+      cachedInputTokens += cached;
+      lastTurnInputTokens = inputTokens;
+      lastTurnCachedInputTokens = cached;
+    }
+
+    if (totalInputTokens > 0 && lastTurnInputTokens > 0) {
+      return {
+        threadHitRate: cachedInputTokens / totalInputTokens,
+        lastTurnHitRate: lastTurnCachedInputTokens / lastTurnInputTokens,
+        totalInputTokens,
+        cachedInputTokens,
+        uncachedInputTokens: Math.max(0, totalInputTokens - cachedInputTokens),
+        lastTurnInputTokens,
+        lastTurnCachedInputTokens,
+        turnCount: cacheEligible.length,
+      };
+    }
+  }
+
+  const livePair =
+    typeof liveUsage?.inputTokens === "number" &&
+    Number.isFinite(liveUsage.inputTokens) &&
+    liveUsage.inputTokens > 0 &&
+    typeof liveUsage.cachedInputTokens === "number" &&
+    Number.isFinite(liveUsage.cachedInputTokens)
+      ? { inputTokens: liveUsage.inputTokens, cachedInputTokens: liveUsage.cachedInputTokens }
+      : null;
+  const snapshotPair =
+    typeof providerThread?.contextUsage?.inputTokens === "number" &&
+    Number.isFinite(providerThread.contextUsage.inputTokens) &&
+    providerThread.contextUsage.inputTokens > 0 &&
+    typeof providerThread.contextUsage.cachedInputTokens === "number" &&
+    Number.isFinite(providerThread.contextUsage.cachedInputTokens)
+      ? {
+          inputTokens: providerThread.contextUsage.inputTokens,
+          cachedInputTokens: providerThread.contextUsage.cachedInputTokens,
+        }
+      : null;
+  const fallbackPair = livePair ?? snapshotPair;
+  if (fallbackPair !== null) {
+    const cached = clampCachedTokens(fallbackPair.cachedInputTokens, fallbackPair.inputTokens);
+    const lastInput = livePair === null ? providerThread?.contextUsage?.lastInputTokens : undefined;
+    const lastCached =
+      livePair === null ? providerThread?.contextUsage?.lastCachedInputTokens : undefined;
+    const hasLast =
+      typeof lastInput === "number" &&
+      Number.isFinite(lastInput) &&
+      lastInput > 0 &&
+      typeof lastCached === "number" &&
+      Number.isFinite(lastCached);
+    const lastTurnInputTokens = hasLast ? lastInput : fallbackPair.inputTokens;
+    const lastTurnCachedInputTokens = hasLast ? clampCachedTokens(lastCached, lastInput) : cached;
+    return {
+      threadHitRate: cached / fallbackPair.inputTokens,
+      lastTurnHitRate: lastTurnCachedInputTokens / lastTurnInputTokens,
+      totalInputTokens: fallbackPair.inputTokens,
+      cachedInputTokens: cached,
+      uncachedInputTokens: Math.max(0, fallbackPair.inputTokens - cached),
+      lastTurnInputTokens,
+      lastTurnCachedInputTokens,
+      turnCount: 1,
+    };
+  }
+
+  return null;
+}
+
 // A typed `/compact`, with or without instructions, is already the compaction. Queueing a
 // bare one ahead of it would run an uninstructed compaction first and charge for two.
 export const COMPACT_COMMAND_PATTERN = /^\/compact(?:\s|$)/i;
