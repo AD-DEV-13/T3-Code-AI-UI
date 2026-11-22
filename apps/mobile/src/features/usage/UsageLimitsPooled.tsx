@@ -371,7 +371,7 @@ function PoolWindowCard({
             key={account.key}
             accessibilityRole="button"
             accessibilityLabel={
-              resetsIn && credits
+              (resetsIn && credits
                 ? gt(
                     "Segment {index}, {account}, {remaining}% left, {resetsIn}, {credits, plural, other {{credits} reset credits banked}}",
                     {
@@ -403,7 +403,7 @@ function PoolWindowCard({
                         index: index + 1,
                         account: accountName(account, m),
                         remaining: remainingPercent(window),
-                      })
+                      })) + (credits && scope ? `, ${scope}` : "")
             }
             accessibilityHint={gt("Show account details")}
             onPress={() => openAccount(account)}
