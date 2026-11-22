@@ -292,10 +292,17 @@ export function layerWithRegistry<Error>(
     readonly runContinuationWorker?: boolean;
     readonly recoverOnStartup?: boolean;
     readonly continueThreadsAfterServerUpdate?: boolean;
+    readonly serverSettingsOverrides?: Parameters<typeof ServerSettings.layerTest>[0];
     /** Lets a test hold a projection read open to order concurrent dispatches. */
     readonly wrapProjectionStore?: (
       store: ProjectionStore.ProjectionStoreV2Shape,
     ) => ProjectionStore.ProjectionStoreV2Shape;
+    readonly wrapProviderEventIngestor?: (
+      ingestor: ProviderEventIngestor.ProviderEventIngestorV2Shape,
+    ) => ProviderEventIngestor.ProviderEventIngestorV2Shape;
+    readonly wrapEffectOutbox?: (
+      outbox: EffectOutbox.EffectOutboxV2Shape,
+    ) => EffectOutbox.EffectOutboxV2Shape;
     readonly managedPolicy?: ManagedPolicyDocument;
     /** The instances the ingestor reads snapshots from, such as an endpoint behind a hub. */
     readonly providerInstances?: Partial<
@@ -333,6 +340,7 @@ export function layerWithRegistry<Error>(
     Effect.map(ManagedPolicy.fromDocument("/test/policy.json", options.managedPolicy), (policy) =>
       ServerSettings.layerTest(
         {
+          ...options.serverSettingsOverrides,
           responseStreamingMode: "turn",
           ...(options.continueThreadsAfterServerUpdate === undefined
             ? {}
@@ -342,7 +350,17 @@ export function layerWithRegistry<Error>(
       ),
     ),
   ).pipe(Layer.orDie);
-  const layerEffectOutboxProvided = EffectOutbox.layer.pipe(Layer.provide(layerDatabase));
+  const wrapEffectOutbox = options.wrapEffectOutbox;
+  const layerEffectOutboxProvided = (
+    wrapEffectOutbox === undefined
+      ? EffectOutbox.layer
+      : Layer.effect(
+          EffectOutbox.EffectOutboxV2,
+          Effect.gen(function* () {
+            return wrapEffectOutbox(yield* EffectOutbox.EffectOutboxV2);
+          }),
+        ).pipe(Layer.provide(EffectOutbox.layer))
+  ).pipe(Layer.provide(layerDatabase));
   const wrapProjectionStore = options.wrapProjectionStore;
   const layerProjectionStore =
     wrapProjectionStore === undefined
@@ -370,7 +388,7 @@ export function layerWithRegistry<Error>(
   const layerCommandReceiptStoreProvided = CommandReceiptStore.layer.pipe(
     Layer.provide(layerDatabase),
   );
-  const layerProviderEventIngestorProvided = ProviderEventIngestor.layer.pipe(
+  const layerProviderEventIngestorBase = ProviderEventIngestor.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
         Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)(
@@ -387,6 +405,16 @@ export function layerWithRegistry<Error>(
       ),
     ),
   );
+  const layerProviderEventIngestorProvided =
+    options.wrapProviderEventIngestor === undefined
+      ? layerProviderEventIngestorBase
+      : Layer.effect(
+          ProviderEventIngestor.ProviderEventIngestorV2,
+          Effect.map(
+            ProviderEventIngestor.ProviderEventIngestorV2,
+            options.wrapProviderEventIngestor,
+          ),
+        ).pipe(Layer.provide(layerProviderEventIngestorBase));
   const layerVcsDriverRegistry = VcsDriverRegistry.layer.pipe(
     Layer.provide(VcsProcess.layer),
     Layer.provide(layerServerConfig),

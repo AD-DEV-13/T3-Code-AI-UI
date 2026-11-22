@@ -101,6 +101,7 @@ export const layerExecutor: Layer.Layer<
   | ThreadTitleRegenerationService.ThreadTitleRegenerationService
   | ThreadManagementService.ThreadManagementService
   | ProjectionStore.ProjectionStoreV2
+  | EffectOutbox.EffectOutboxV2
   | ServerSettings.ServerSettingsService
 > = Layer.effect(
   OrchestrationEffectExecutorV2,
@@ -116,6 +117,7 @@ export const layerExecutor: Layer.Layer<
       yield* ThreadTitleRegenerationService.ThreadTitleRegenerationService;
     const threads = yield* ThreadManagementService.ThreadManagementService;
     const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
+    const effectOutbox = yield* EffectOutbox.EffectOutboxV2;
     const settings = yield* ServerSettings.ServerSettingsService;
     const startRun = (
       effect: EffectOutbox.OrchestrationEffectV2,
@@ -327,7 +329,24 @@ export const layerExecutor: Layer.Layer<
                 ),
               );
           }
-          case "provider-turn.steer":
+          case "provider-turn.steer": {
+            const acceptDelivery = Effect.gen(function* () {
+              if (effect.request.type !== "provider-turn.steer") return;
+              const { messageId } = effect.request;
+              const projection = yield* threads.getThreadRecords(
+                effect.threadId,
+                ["messages", "runs"],
+                { messageIds: [messageId] },
+              );
+              const message = projection.messages.find((row) => row.id === messageId);
+              if (message?.delegatedCompletion === undefined) return;
+              yield* threads.dispatch({
+                type: "notification.delivery.accept",
+                commandId: CommandId.make(`command:mailbox-accepted:${effect.id}`),
+                threadId: effect.threadId,
+                messageId,
+              });
+            });
             return providerTurnControl
               .steer({
                 threadId: effect.threadId,
@@ -340,25 +359,7 @@ export const layerExecutor: Layer.Layer<
                   : { modelSelection: effect.request.modelSelection }),
               })
               .pipe(
-                Effect.tap(() =>
-                  Effect.gen(function* () {
-                    if (effect.request.type !== "provider-turn.steer") return;
-                    const messageId = effect.request.messageId;
-                    const projection = yield* threads.getThreadRecords(
-                      effect.threadId,
-                      ["messages", "runs"],
-                      { messageIds: [effect.request.messageId] },
-                    );
-                    const message = projection.messages.find((row) => row.id === messageId);
-                    if (message?.delegatedCompletion === undefined) return;
-                    yield* threads.dispatch({
-                      type: "notification.delivery.accept",
-                      commandId: CommandId.make(`command:mailbox-accepted:${effect.id}`),
-                      threadId: effect.threadId,
-                      messageId: message.id,
-                    });
-                  }),
-                ),
+                Effect.tap(() => acceptDelivery),
                 Effect.catch((error) =>
                   Effect.gen(function* () {
                     if (
@@ -368,6 +369,12 @@ export const layerExecutor: Layer.Layer<
                     ) {
                       return yield* error;
                     }
+                    const persisted = Option.getOrUndefined(yield* effectOutbox.get(effect.id));
+                    if (
+                      persisted?.request.type === "provider-turn.steer" &&
+                      persisted.request.runtimeAccepted === true
+                    )
+                      return yield* acceptDelivery;
                     const projection = yield* threads.getThreadRecords(
                       effect.threadId,
                       ["messages", "runs"],
@@ -381,7 +388,8 @@ export const layerExecutor: Layer.Layer<
                     const queued =
                       message.delegatedCompletion !== undefined ||
                       message.notification !== undefined ||
-                      error.steerDeclined === true;
+                      error.steerDeclined === true ||
+                      error.turnCompleted === true;
                     // Reuse message ids and receipts so retries cannot duplicate messages or follow-ups.
                     yield* threads
                       .dispatch({
@@ -389,7 +397,9 @@ export const layerExecutor: Layer.Layer<
                         commandId: CommandId.make(`command:steer-follow-up:${effect.id}`),
                         threadId: effect.threadId,
                         messageId: message.id,
-                        ...(error.steerDeclined ? { steerFollowUpOfRunId: run.id } : {}),
+                        ...(error.turnCompleted || error.steerDeclined
+                          ? { steerFollowUpOfRunId: run.id }
+                          : {}),
                         ...(effect.request.steerFollowUpAfterRunOrdinal !== undefined
                           ? {
                               steerFollowUpAfterRunOrdinal:
@@ -399,7 +409,8 @@ export const layerExecutor: Layer.Layer<
                         text: message.text,
                         ...(message.context ? { context: message.context } : {}),
                         attachments: message.attachments,
-                        ...(error.steerDeclined && effect.request.modelSelection !== undefined
+                        ...((error.turnCompleted || error.steerDeclined) &&
+                        effect.request.modelSelection !== undefined
                           ? { modelSelection: effect.request.modelSelection }
                           : message.delegatedCompletion === undefined
                             ? {}
@@ -451,6 +462,7 @@ export const layerExecutor: Layer.Layer<
                     }),
                 ),
               );
+          }
           case "provider-turn.restart":
             return providerTurnControl
               .interruptAndAwaitTerminal({
