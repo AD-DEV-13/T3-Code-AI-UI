@@ -792,6 +792,7 @@ const make = Effect.gen(function* () {
         // `:/text` bases are commit searches, not refs; `hasCommit` treats the appended
         // `^{commit}` as part of the pattern (same guard as checkWorktreeBase).
         const recordedBaseResolves =
+          checkoutExisting ||
           !projectIsRepository ||
           fetchedBase ||
           startRef.startsWith(":") ||
