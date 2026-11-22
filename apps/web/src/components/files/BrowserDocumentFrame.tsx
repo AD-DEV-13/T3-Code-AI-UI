@@ -1,3 +1,4 @@
+import { useGT } from "gt-react";
 import { useAtomValue } from "@effect/atom-react";
 import {
   type KeybindingCommand,
@@ -38,8 +39,12 @@ import {
   useState,
 } from "react";
 import { isElectron } from "~/env";
-import { FileSurfaceLoading } from "./fileSurfaceChrome";
+import { MoonIcon, SunIcon } from "lucide-react";
+import { FileSurfaceAction, FileSurfaceLoading } from "./fileSurfaceChrome";
 import type { PdfViewState } from "./PdfViewer";
+import { useClientSettings } from "~/hooks/useSettings";
+import { useRenderedAppearance } from "~/hooks/useTheme";
+import "./pdfAppearance.css";
 
 import { useOpenLink } from "~/browser/useOpenLink";
 import { ExpandedImageDialog } from "~/components/chat/ExpandedImageDialog";
@@ -87,19 +92,43 @@ function PdfDocument(props: {
   documentKey: string;
   threadRef: ScopedThreadRef | undefined;
   actions?: ReactNode;
+  pending?: boolean;
 }) {
+  const gt = useGT();
   const [view, setView] = useState<PdfViewState>({ page: 0, offset: 0, zoom: null, left: 0 });
+  const appearance = useClientSettings((settings) => settings.pdfAppearance);
+  const themeAppearance = useRenderedAppearance();
+  const [override, setOverride] = useState<boolean | null>(null);
+  const dark =
+    override ??
+    (appearance === "dark" || (appearance === "match-app" && themeAppearance === "dark"));
+  if (props.pending) return <FileSurfaceLoading />;
   return (
-    <PdfDocumentRevision
-      key={props.documentKey}
-      src={props.src}
-      title={props.title}
-      positionKey={props.documentKey}
-      initialView={view}
-      onViewChange={setView}
-      threadRef={props.threadRef}
-      actions={props.actions}
-    />
+    <div
+      className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
+      data-pdf-appearance={dark ? "dark" : "original"}
+    >
+      <PdfDocumentRevision
+        key={props.documentKey}
+        src={props.src}
+        title={props.title}
+        positionKey={props.documentKey}
+        initialView={view}
+        onViewChange={setView}
+        threadRef={props.threadRef}
+        actions={props.actions}
+        appearanceAction={
+          <FileSurfaceAction
+            label={gt("Inverted colors")}
+            tooltip={dark ? gt("Restore original colors") : gt("Invert colors")}
+            pressed={dark}
+            onPress={() => setOverride(!dark)}
+          >
+            {dark ? <MoonIcon className="size-3.5" /> : <SunIcon className="size-3.5" />}
+          </FileSurfaceAction>
+        }
+      />
+    </div>
   );
 }
 
@@ -112,6 +141,7 @@ function PdfDocumentRevision(props: {
   onViewChange: (view: PdfViewState) => void;
   threadRef: ScopedThreadRef | undefined;
   actions?: ReactNode;
+  appearanceAction: ReactNode;
 }) {
   const [src] = useState(props.src);
   const openLink = useOpenLink(props.threadRef);
@@ -123,12 +153,18 @@ function PdfDocumentRevision(props: {
     !/iPad|iPhone|iPod/.test(navigator.userAgent) &&
     !(navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
   return native ? (
-    // oxlint-disable-next-line react/iframe-missing-sandbox -- Chromium's PDF plugin requires an unsandboxed frame; src is an exact-file asset grant.
-    <iframe
-      src={`${src.split("#", 1)[0]}#navpanes=0&view=FitH`}
-      title={props.title}
-      className="block h-full min-h-0 w-full flex-1 border-0 bg-white"
-    />
+    <>
+      <div className="flex shrink-0 items-center justify-end border-b border-border/60 px-2 py-1">
+        {props.appearanceAction}
+      </div>
+      {/* oxlint-disable-next-line react/iframe-missing-sandbox -- Chromium's PDF plugin requires an unsandboxed frame; src is an exact-file asset grant. */}
+      <iframe
+        data-pdf-native-viewer
+        src={`${src.split("#", 1)[0]}#navpanes=0&view=FitH`}
+        title={props.title}
+        className="block h-full min-h-0 w-full flex-1 border-0 bg-white"
+      />
+    </>
   ) : (
     <Suspense fallback={<FileSurfaceLoading />}>
       <PdfViewer
@@ -140,7 +176,12 @@ function PdfDocumentRevision(props: {
         onOpenLink={(url, event) => {
           void openLink(url, { event }).catch((cause: unknown) => console.error(cause));
         }}
-        actions={props.actions}
+        actions={
+          <>
+            {props.appearanceAction}
+            {props.actions}
+          </>
+        }
       />
     </Suspense>
   );
@@ -162,6 +203,7 @@ export function BrowserDocumentFrame(props: {
   readonly documentId?: string | undefined;
   /** Toolbar actions for the in-app PDF viewer; Chromium's own viewer brings its own. */
   readonly pdfActions?: ReactNode;
+  readonly pdfPending?: boolean;
 }) {
   const key = props.documentKey ?? props.src;
   return props.pdf ? (
@@ -172,6 +214,7 @@ export function BrowserDocumentFrame(props: {
       title={props.title}
       threadRef={props.threadRef}
       actions={props.pdfActions}
+      pending={props.pdfPending === true}
     />
   ) : props.htmlRender ? (
     <HtmlRenderDocument
