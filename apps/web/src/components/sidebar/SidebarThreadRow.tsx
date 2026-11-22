@@ -82,7 +82,10 @@ import { useSidebarLinkedIssueState } from "../../state/issues";
 import { useEnvironmentQuery } from "../../state/query";
 import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
 import { formatRelativeTime, parseTimestampDate } from "../../timestampFormat";
+import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
+import { useEnvironmentSettings } from "~/hooks/useSettings";
 import type { SidebarThreadSummary } from "../../types";
+import { settleReadinessTrace, type SettleCheckId } from "./settleReadiness.logic";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import { cn } from "~/lib/utils";
 import { textDirection } from "~/textDirection";
@@ -121,7 +124,10 @@ import { makeWorkspaceFileDropHandlers } from "../chat/workspaceFileDrop";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 import { getTriggerDisplayModelName } from "../chat/providerIconUtils";
 import { shouldShowInstanceBadge, type ProviderInstanceEntry } from "../../providerInstances";
-import { useThreadRunningTerminalIds } from "../../state/terminalSessions";
+import {
+  useKnownTerminalSessions,
+  useThreadRunningTerminalIds,
+} from "../../state/terminalSessions";
 import { InlineButton } from "../ui/button";
 import { Kbd } from "../ui/kbd";
 import { Menu, MenuItem, MenuItemDetail, MenuPopup, MenuSeparator, MenuTrigger } from "../ui/menu";
@@ -266,6 +272,7 @@ function SidebarThreadTooltip({
   branchMismatch,
   terminalStatus,
   terminalProcessCount,
+  settleReadiness,
 }: {
   thread: SidebarThreadSummary;
   project: ProjectFaviconProject | null;
@@ -283,6 +290,11 @@ function SidebarThreadTooltip({
   } | null;
   terminalStatus: TerminalStatusIndicator | null;
   terminalProcessCount: number;
+  settleReadiness: {
+    readonly snoozed: boolean;
+    readonly unread: boolean;
+    readonly terminalRunning: boolean;
+  } | null;
 }) {
   const driverKind = providerEntry?.driverKind ?? null;
   const previousProviderNames = thread.providerInstanceHistory
@@ -390,8 +402,66 @@ function SidebarThreadTooltip({
             </div>
           </div>
         ) : null}
+        {settleReadiness ? <SettleReadinessRows thread={thread} {...settleReadiness} /> : null}
       </ThreadHoverCard>
     </ThreadHoverCardPopup>
+  );
+}
+
+function SettleReadinessRows(props: {
+  thread: SidebarThreadSummary;
+  snoozed: boolean;
+  unread: boolean;
+  terminalRunning: boolean;
+}) {
+  const { thread } = props;
+  const gt = useGT();
+  const readiness = useEnvironmentSettings(
+    thread.environmentId,
+    (settings) =>
+      resolveProjectSettings(settings, thread.projectId).settings.sidebarAutoSettleReadiness,
+  );
+  const trace = settleReadinessTrace(thread, {
+    readiness: readiness ?? "default",
+    snoozed: props.snoozed,
+    unread: props.unread,
+    terminalRunning: props.terminalRunning,
+  });
+  if (trace === null) return null;
+  const labels: Record<SettleCheckId, string> = {
+    "kept-active": gt("Not kept active by hand"),
+    pinned: gt("Not pinned"),
+    "auto-settle-off": gt("Auto-settle allowed for this thread"),
+    "waiting-on-you": gt("Nothing waiting on you"),
+    working: gt("No work running"),
+    "watching-pull-request": gt("No pull request watch"),
+    snoozed: gt("Not snoozed"),
+    "latest-run-failed": gt("Latest run did not fail"),
+    "unread-reply": gt("Latest reply read"),
+    "terminal-running": gt("No terminal program running"),
+  };
+  return (
+    <div className="flex min-w-0 flex-col gap-1 border-t border-border/60 pt-2">
+      <div className="text-foreground/75">
+        {trace.ready ? gt("Ready to settle") : gt("Not ready to settle")}
+      </div>
+      {trace.checks.map((check) => (
+        <div
+          key={check.id}
+          className={cn(
+            "flex min-w-0 items-center gap-2",
+            check.passed ? "text-muted-foreground" : "text-warning",
+          )}
+        >
+          {check.passed ? (
+            <CircleCheckIcon aria-hidden className="size-3 shrink-0 stroke-current" />
+          ) : (
+            <CircleAlertIcon aria-hidden className="size-3 shrink-0 stroke-current" />
+          )}
+          <div className="min-w-0 truncate">{labels[check.id]}</div>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -726,6 +796,14 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   });
   const terminalStatus = terminalStatusFromRunningIds(runningTerminalIds, messages);
   const terminalProcessCount = runningTerminalIds.length;
+  const knownTerminalSessions = useKnownTerminalSessions({
+    environmentId: thread.environmentId,
+    threadId: thread.id,
+  });
+  // Mirrors TerminalManager.hasActiveSubprocess: stop-on-settle terminals do not hold settlement.
+  const terminalHoldsSettle = (knownTerminalSessions ?? []).some(
+    (session) => session.state.hasRunningSubprocess && session.state.summary?.stopOnSettle !== true,
+  );
   const hasUnsentDraft = useThreadHasUnsentDraft(threadRef) && !props.isRouteThread;
   const handleDiscardDraftClick = (event: ReactMouseEvent) => {
     event.preventDefault();
@@ -881,6 +959,15 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       branchMismatch={branchMismatch}
       terminalStatus={terminalStatus}
       terminalProcessCount={terminalProcessCount}
+      settleReadiness={
+        props.settlementSupported
+          ? {
+              snoozed: props.snoozeWakeLabelText !== null,
+              unread: isUnread,
+              terminalRunning: terminalHoldsSettle,
+            }
+          : null
+      }
     />
   );
 
@@ -1974,6 +2061,7 @@ export const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props
           branchMismatch={branchMismatch}
           terminalStatus={terminalStatus}
           terminalProcessCount={runningTerminalIds.length}
+          settleReadiness={null}
         />
       </Tooltip>
     </li>
