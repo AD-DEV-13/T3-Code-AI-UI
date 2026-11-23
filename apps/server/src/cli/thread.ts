@@ -1062,6 +1062,7 @@ const threadShowCommand = Command.make("show", {
           const messages = yield* Effect.forEach(latest, (item) =>
             readFullText(tools, threadId, item).pipe(
               Effect.map((text) => ({
+                messageId: item.messageId,
                 role:
                   item.type === "assistant_message"
                     ? "assistant"
