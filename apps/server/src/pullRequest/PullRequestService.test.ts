@@ -10,6 +10,7 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import type {
@@ -3438,6 +3439,51 @@ it.effect("reads the fresh diff when detail or summary discovers a changed revis
     yield* service.summary(reference, { recoverTransientFailure: false });
     assert.strictEqual((yield* service.diff(reference)).patch, patch);
     assert.strictEqual(diffCalls, 3);
+  }),
+);
+
+it.effect("notifies readers of a held detail only when its refresh finds a change", () =>
+  Effect.gen(function* () {
+    let status: "pending" | "success" = "pending";
+    const fetches = yield* Queue.unbounded<void>();
+    const reference = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
+    const checks = () => [{ name: "ci", status, description: null, url: null }];
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        fakePullRequestProvider(SourceControlProviderKind.make("github"), {
+          // Hosts do not always move `updatedAt` when CI finishes.
+          getChangeRequest: () =>
+            Queue.offer(fetches, undefined).pipe(
+              Effect.as({ ...hostedChangeRequest("body"), checks: checks() }),
+            ),
+          getChangeRequestChecks: () =>
+            Effect.sync(() => ({ state: "open" as const, checks: checks() })),
+        }),
+      ],
+    });
+
+    yield* service.detail(reference);
+    yield* Queue.take(fetches);
+    yield* TestClock.adjust("61 seconds");
+    yield* service.detail(reference);
+    yield* Queue.take(fetches);
+
+    yield* TestClock.adjust("61 seconds");
+    yield* service.checks(reference);
+    status = "success";
+    yield* service.detail(reference);
+    // The unchanged refresh above stayed quiet, so this is the first notice.
+    assert.strictEqual(Option.getOrThrow(yield* Stream.runHead(service.subscribeRefreshes)), 1);
+    // Readers refetch on the notice, well inside the checks cache's lifetime.
+    assert.deepStrictEqual(
+      (yield* service.detail(reference)).checks.map((check) => check.status),
+      ["success"],
+    );
+    assert.deepStrictEqual(
+      (yield* service.checks(reference))?.checks.map((check) => check.status),
+      ["success"],
+    );
   }),
 );
 
