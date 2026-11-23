@@ -968,7 +968,7 @@ it.live.each([
         }),
         Layer.mock(AnalyticsService.AnalyticsService)({ recordOwners: () => Effect.void }),
         Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
-          namedProjectsRoot: process.cwd(),
+          resolveNamedProjectsRoot: () => process.cwd(),
         }),
         Layer.mock(ScratchThreadPromotion.ScratchThreadPromotion)({}),
         Layer.mock(ProviderRegistry.ProviderRegistry)({}),
@@ -1111,7 +1111,7 @@ it.effect.each([
         }),
         Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
           scratchRoot: Effect.succeedNone,
-          namedProjectsRoot: process.cwd(),
+          resolveNamedProjectsRoot: () => process.cwd(),
         }),
         Layer.mock(ScratchThreadPromotion.ScratchThreadPromotion)({}),
         Layer.mock(ServerEnvironment.ServerEnvironment)({
@@ -1335,7 +1335,7 @@ it.effect("access changes made while the snapshot loads reach the client after i
               Layer.mock(RemoteOpenTargets.RemoteOpenTargets)({}),
               Layer.mock(DirectEndpoints.DirectEndpoints)({}),
               Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
-                namedProjectsRoot: "/unused",
+                resolveNamedProjectsRoot: () => "/unused",
               }),
               Layer.mock(ScratchThreadPromotion.ScratchThreadPromotion)({}),
               Layer.mock(ServerEnvironment.ServerEnvironment)({}),
@@ -1492,7 +1492,7 @@ it.effect("on-demand clients get provider config without workspace snapshots", (
       }),
       Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
         scratchRoot: Effect.succeedNone,
-        namedProjectsRoot: process.cwd(),
+        resolveNamedProjectsRoot: () => process.cwd(),
       }),
       Layer.mock(ScratchThreadPromotion.ScratchThreadPromotion)({}),
       Layer.mock(ServerEnvironment.ServerEnvironment)({
@@ -1871,7 +1871,7 @@ it.effect("a missing thread worktree gets its project's skills in the cwd snapsh
       Layer.mock(DirectEndpoints.DirectEndpoints)({}),
       Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
         scratchRoot: Effect.succeedNone,
-        namedProjectsRoot: process.cwd(),
+        resolveNamedProjectsRoot: () => process.cwd(),
       }),
       Layer.mock(ScratchThreadPromotion.ScratchThreadPromotion)({}),
       Layer.mock(ServerEnvironment.ServerEnvironment)({}),
@@ -1958,7 +1958,9 @@ it.effect("a git action that fails partway still refreshes the repository status
       Layer.mock(UsageLimitSources.UsageLimitSources)({}),
       Layer.mock(RemoteOpenTargets.RemoteOpenTargets)({}),
       Layer.mock(DirectEndpoints.DirectEndpoints)({}),
-      Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/unused" }),
+      Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+        resolveNamedProjectsRoot: () => "/unused",
+      }),
       Layer.mock(ScratchThreadPromotion.ScratchThreadPromotion)({}),
       Layer.mock(ServerEnvironment.ServerEnvironment)({}),
       Layer.mock(EnvironmentAuth.EnvironmentAuth)({}),
@@ -2038,7 +2040,9 @@ it.effect("a publish whose push fails still refreshes the new remote", () =>
       Layer.mock(UsageLimitSources.UsageLimitSources)({}),
       Layer.mock(RemoteOpenTargets.RemoteOpenTargets)({}),
       Layer.mock(DirectEndpoints.DirectEndpoints)({}),
-      Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/unused" }),
+      Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+        resolveNamedProjectsRoot: () => "/unused",
+      }),
       Layer.mock(ScratchThreadPromotion.ScratchThreadPromotion)({}),
       Layer.mock(ServerEnvironment.ServerEnvironment)({}),
       Layer.mock(EnvironmentAuth.EnvironmentAuth)({}),
@@ -2538,7 +2542,9 @@ it.effect("ACP session RPCs list a thread missing its history and repair it on i
       Layer.mock(UsageLimitSources.UsageLimitSources)({}),
       Layer.mock(RemoteOpenTargets.RemoteOpenTargets)({}),
       Layer.mock(DirectEndpoints.DirectEndpoints)({}),
-      Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/unused" }),
+      Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
+        resolveNamedProjectsRoot: () => "/unused",
+      }),
       Layer.mock(ScratchThreadPromotion.ScratchThreadPromotion)({}),
       Layer.mock(ServerEnvironment.ServerEnvironment)({}),
       Layer.mock(EnvironmentAuth.EnvironmentAuth)({}),
