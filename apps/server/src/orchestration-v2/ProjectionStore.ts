@@ -110,6 +110,7 @@ import {
   JAVASCRIPT_TRIM_WHITESPACE,
 } from "./deferredCommandMessage.ts";
 import { readableSearchText } from "./messageSearchIndex.ts";
+import { THREAD_ORGANIZATION_EVENT_CONDITION } from "./threadOrganizationEvent.ts";
 import {
   isFoldableWorkItem,
   isThreadHistoryUserTurn,
@@ -208,6 +209,7 @@ export type ProjectionLimitRecoveryCandidate = Pick<
   | "updatedAt"
   | "limitRecovery"
   | "snoozedUntil"
+  | "snoozedAt"
 >;
 
 export type ProjectionThreadPullRequests = Pick<
@@ -514,6 +516,7 @@ export interface ActiveShellIndexEntry extends Pick<
   | "pinnedAt"
   | "pinOrderKey"
   | "snoozedUntil"
+  | "snoozedAt"
 > {
   /** False only when no run, request, work item, or watch can make the shell live. */
   readonly mayBeLive: boolean;
@@ -532,6 +535,7 @@ export type ActiveThreadListEntry = Pick<
   | "settledOverride"
   | "settledAt"
   | "snoozedUntil"
+  | "snoozedAt"
   | "updatedAt"
 >;
 
@@ -683,6 +687,15 @@ export interface ProjectionStoreV2Shape {
   readonly getSettlementCandidates: (
     threadId?: ThreadId,
   ) => Effect.Effect<ReadonlyArray<ProjectionSettlementCandidate>, ProjectionStoreV2Error>;
+  /** Active threads with a linked issue, each with its issue automation revision. */
+  readonly getIssueAutomationCandidates: () => Effect.Effect<
+    ReadonlyArray<{ readonly thread: OrchestrationV2AppThread; readonly revision: number }>,
+    ProjectionStoreV2Error
+  >;
+  /** The sequence of the thread's newest organizing event or user message, or 0. */
+  readonly getIssueAutomationRevision: (
+    threadId: ThreadId,
+  ) => Effect.Effect<number, ProjectionStoreV2Error>;
   readonly getThreadsWithPullRequests: (
     threadId?: ThreadId,
     options?: { readonly includeArchived?: boolean },
@@ -5042,7 +5055,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 AND json_extract(t.payload_json, '$.limitRecovery.autoResume') = 1
                 AND julianday(json_extract(item.payload_json, '$.failure.resetAt')) <= julianday(${DateTime.formatIso(options.now)})
                 AND (
-                  json_extract(t.payload_json, '$.snoozedUntil') IS NULL
+                  (
+                    json_extract(t.payload_json, '$.snoozedUntil') IS NULL
+                    AND json_extract(t.payload_json, '$.snoozedAt') IS NULL
+                  )
                   OR julianday(json_extract(t.payload_json, '$.snoozedUntil')) <= julianday(${DateTime.formatIso(options.now)})
                 )
               )
@@ -5097,6 +5113,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             pendingRuntimeRequest: null,
             limitRecovery: thread.limitRecovery ?? null,
             snoozedUntil: thread.snoozedUntil ?? null,
+            snoozedAt: thread.snoozedAt ?? null,
           });
         }
         return candidates;
@@ -8990,6 +9007,40 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         )
         .pipe(Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })));
 
+    // Event pruning keeps this row, so a revision never goes back to one a waiting action
+    // recorded. Without the hint, SQLite walks every event of the thread.
+    const issueAutomationRevision = (threadId: Statement.Fragment) => sql`(
+      SELECT COALESCE(MAX(sequence), 0) FROM orchestration_events
+        INDEXED BY idx_orchestration_events_thread_organization
+      WHERE stream_id = ${threadId} AND ${sql.literal(THREAD_ORGANIZATION_EVENT_CONDITION)}
+    )`;
+    const getIssueAutomationRevision = Effect.fn("ProjectionStore.getIssueAutomationRevision")(
+      function* (threadId: Parameters<ProjectionStoreV2Shape["getIssueAutomationRevision"]>[0]) {
+        const rows = yield* sql<{ readonly revision: number }>`
+          SELECT ${issueAutomationRevision(sql`${threadId}`)} AS revision
+        `.pipe(Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })));
+        return rows[0]?.revision ?? 0;
+      },
+    );
+    const getIssueAutomationCandidates = Effect.fn("ProjectionStore.getIssueAutomationCandidates")(
+      () =>
+        sql<{ readonly payload_json: string; readonly revision: number }>`
+          SELECT t.payload_json, ${issueAutomationRevision(sql.literal("t.thread_id"))} AS revision
+          FROM orchestration_v2_projection_threads t
+          WHERE t.deleted_at IS NULL AND t.archived_at IS NULL
+            AND json_type(t.payload_json, '$.issues[0]') IS NOT NULL
+        `.pipe(
+          Effect.flatMap((rows) =>
+            Effect.forEach(rows, (row) =>
+              decodeThreadPayload(row.payload_json).pipe(
+                Effect.map((thread) => ({ thread, revision: row.revision })),
+              ),
+            ),
+          ),
+          Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })),
+        ),
+    );
+
     const getOpenRemoteDelegatedTasks: ProjectionStoreV2Shape["getOpenRemoteDelegatedTasks"] = sql<{
       readonly thread_id: string;
       readonly subagent_id: string;
@@ -9547,6 +9598,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         readonly pinned_at: string | null;
         readonly pin_order_key: string | null;
         readonly snoozed_until: string | null;
+        readonly snoozed_at: string | null;
         readonly may_be_live: number;
         readonly has_remote_tasks: number;
       }>`
@@ -9562,6 +9614,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           ${indexedField("$.pinnedAt")} AS pinned_at,
           ${indexedField("$.pinOrderKey")} AS pin_order_key,
           ${indexedField("$.snoozedUntil")} AS snoozed_until,
+          ${indexedField("$.snoozedAt")} AS snoozed_at,
           -- A superset of isLiveSubagentShell: the sources of its run status, pending request,
           -- and pending background work. Each source is one list for the whole read, found
           -- through its partial index, so finished threads cost no lookups.
@@ -9626,6 +9679,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         pinnedAt: row.pinned_at === null ? null : DateTime.makeUnsafe(row.pinned_at),
         pinOrderKey: row.pin_order_key,
         snoozedUntil: row.snoozed_until === null ? null : DateTime.makeUnsafe(row.snoozed_until),
+        snoozedAt: row.snoozed_at === null ? null : DateTime.makeUnsafe(row.snoozed_at),
         mayBeLive: row.may_be_live === 1,
         hasRemoteTasks: row.has_remote_tasks === 1,
       }));
@@ -9650,6 +9704,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         readonly settled_override: string | null;
         readonly settled_at: string | null;
         readonly snoozed_until: string | null;
+        readonly snoozed_at: string | null;
       }>`
         SELECT
           t.thread_id,
@@ -9666,7 +9721,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           json_extract(t.payload_json, '$.delegatedFrom.title') AS delegated_from_title,
           json_extract(t.payload_json, '$.settledOverride') AS settled_override,
           json_extract(t.payload_json, '$.settledAt') AS settled_at,
-          json_extract(t.payload_json, '$.snoozedUntil') AS snoozed_until
+          json_extract(t.payload_json, '$.snoozedUntil') AS snoozed_until,
+          json_extract(t.payload_json, '$.snoozedAt') AS snoozed_at
         FROM orchestration_v2_projection_threads t
         WHERE t.deleted_at IS NULL
           AND t.archived_at IS NULL${projectId === undefined ? sql`` : sql` AND t.project_id = ${projectId}`}
@@ -9694,6 +9750,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             : null,
         settledAt: row.settled_at === null ? null : DateTime.makeUnsafe(row.settled_at),
         snoozedUntil: row.snoozed_until === null ? null : DateTime.makeUnsafe(row.snoozed_until),
+        snoozedAt: row.snoozed_at === null ? null : DateTime.makeUnsafe(row.snoozed_at),
         updatedAt: DateTime.makeUnsafe(row.updated_at),
       }));
     }, Effect.mapError(shellSnapshotReadError));
@@ -9897,6 +9954,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       getThread: readOnReader(getThread),
       findThread: readOnReader(findThread),
       getSettlementCandidates: readOnReader(getSettlementCandidates),
+      getIssueAutomationCandidates: readOnReader(getIssueAutomationCandidates),
+      getIssueAutomationRevision: readOnReader(getIssueAutomationRevision),
       getThreadsWithPullRequests: readOnReader(getThreadsWithPullRequests),
       getThreadTitles: readOnReader(getThreadTitles),
       getThreadLinkMetadata: readOnReader(getThreadLinkMetadata),

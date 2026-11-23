@@ -434,6 +434,31 @@ work on with the `link_issue` tool.
 
 Writing to a tracker over a remote connection requires the `source-control:write` scope.
 
+### Organize threads by issue status
+
+Threads can follow the status of the issues linked to them. Open the connected tracker under
+**Settings → Source control & issues**, choose **Add team**, and use the **+** buttons to put the
+team's statuses in **Wake**, **Snooze**, or **Settle**. The rule applies to every thread linked
+to one of the team's issues, in any project. It changes threads, never issues. Linear is the
+supported tracker. Rules read statuses through the first Linear account you connected, so they
+cover the teams in its workspace.
+
+You can also ask an agent, for example "settle my threads when Engineering issues move to Done".
+It reads and changes the same rules as Settings. To change a rule, the thread must run in Full
+access and not in Plan mode.
+
+The server checks linked issues about once a minute while it runs, with or without a client
+open. Only a status change counts: the first check after you save a rule records the current
+statuses, and a thread you organize by hand stays that way until one of its issues moves again. A
+thread wakes when any linked issue maps to **Wake**. Short of that, it stays as it is while any
+linked issue has a status in no bucket, could not be read, or belongs to a team without a rule;
+it settles only when all of them map to **Settle**, and otherwise snoozes. A snooze from a rule has no wake time; the thread shows **∞** in the
+Snoozed list until a status change, **Wake thread**, or a message wakes it. A thread with work
+still running waits until it is idle before it snoozes or settles. A rule never settles a pinned
+thread. Rules leave a thread whose **Auto-settle behavior** is **Never** alone: they do not wake,
+snooze, or settle it, and an action still waiting for the thread to go idle is dropped. After you
+switch it back to **Follow settings**, only later status changes count.
+
 ## GitHub stacks
 
 The Pull requests page shows each PR's position in its GitHub stack. Open the stack badge in a
