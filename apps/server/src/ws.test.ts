@@ -1044,6 +1044,7 @@ it.effect.each([
       const settings = yield* ServerSettings.ServerSettingsService;
       const keybindingsSubscribed = yield* Deferred.make<void>();
       const settingsSubscribed = yield* Deferred.make<void>();
+      const providersSubscribed = yield* Deferred.make<void>();
       const keybindingsChanges = keybindings.subscribeChanges.pipe(
         Effect.tap(() => Deferred.succeed(keybindingsSubscribed, undefined)),
       );
@@ -1078,7 +1079,9 @@ it.effect.each([
         }),
         Layer.mock(ProviderRegistry.ProviderRegistry)({
           getProviders: Effect.succeed([]),
-          streamChanges: Stream.never,
+          subscribeChanges: Deferred.succeed(providersSubscribed, undefined).pipe(
+            Effect.as(Stream.never),
+          ),
         }),
         Layer.mock(UsageLimitSources.UsageLimitSources)({ streamChanges: Stream.make([]) }),
         Layer.mock(RemoteOpenTargets.RemoteOpenTargets)({
@@ -1183,6 +1186,8 @@ it.effect.each([
       });
       yield* Deferred.await(discoveryStarted);
       assert.isTrue(yield* Deferred.isDone(remoteDiscoveryStarted));
+      // Startup probes are released by this delivery, so their results must already be buffered.
+      assert.isTrue(yield* Deferred.isDone(providersSubscribed));
 
       const duringDiscovery = yield* settings.updateSettings({ defaultAutoPull: true });
       yield* Deferred.succeed(finishDiscovery, undefined);
@@ -1455,8 +1460,8 @@ it.effect("on-demand clients get provider config without workspace snapshots", (
       }),
       Layer.mock(ProviderRegistry.ProviderRegistry)({
         getProviders: Effect.sync(() => registryProviders),
-        streamChanges: Stream.fromQueue(providerChanges).pipe(
-          Stream.tap(() => Queue.offer(pulled, undefined)),
+        subscribeChanges: Effect.succeed(
+          Stream.fromQueue(providerChanges).pipe(Stream.tap(() => Queue.offer(pulled, undefined))),
         ),
         refresh: () => Effect.sync(() => registryProviders),
         refreshWorkspaceSnapshot: () => Effect.sync(() => registryProviders),
