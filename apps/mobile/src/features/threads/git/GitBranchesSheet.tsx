@@ -1,3 +1,4 @@
+import { LTR_TEXT_STYLE } from "../../../lib/typography";
 import { sanitizeFeatureBranchName } from "@t3tools/shared/git";
 import { useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import { useGT } from "gt-react-native";
@@ -71,6 +72,7 @@ export function GitBranchesSheet(_props: GitBranchesSheetProps) {
     >
       <FormSection title={gt("New branch")}>
         <FormField
+          style={LTR_TEXT_STYLE}
           value={newBranchName}
           onChangeText={setNewBranchName}
           placeholder="feature/mobile-polish"
@@ -95,6 +97,7 @@ export function GitBranchesSheet(_props: GitBranchesSheetProps) {
 
       <FormSection title={gt("New worktree")}>
         <FormField
+          style={LTR_TEXT_STYLE}
           label={gt("Base branch")}
           value={worktreeBaseBranch}
           onChangeText={setWorktreeBaseBranchOverride}
@@ -102,6 +105,7 @@ export function GitBranchesSheet(_props: GitBranchesSheetProps) {
           accessibilityLabel={gt("Worktree base branch")}
         />
         <FormField
+          style={LTR_TEXT_STYLE}
           label={gt("New branch")}
           value={worktreeBranchName}
           onChangeText={setWorktreeBranchName}
@@ -157,6 +161,7 @@ export function GitBranchesSheet(_props: GitBranchesSheetProps) {
             <ListChoiceRow
               key={branch.name}
               label={branch.name}
+              labelWritingDirection="ltr"
               description={subtitle}
               selected={branch.current}
               separated={index > 0}

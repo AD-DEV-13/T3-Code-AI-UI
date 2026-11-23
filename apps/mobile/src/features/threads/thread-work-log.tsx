@@ -1,4 +1,5 @@
 import { ProviderIcon } from "../../components/ProviderIcon";
+import { LTR_TEXT_STYLE } from "../../lib/typography";
 import { Button } from "../../components/ui/Button";
 import { ThreadSubagentGroup } from "./thread-subagent-group";
 import { ProposedPlanCard } from "./ProposedPlanCard";
@@ -35,6 +36,7 @@ import {
   type ReactNode,
 } from "react";
 import {
+  I18nManager,
   Animated as NativeAnimated,
   type ColorValue,
   Pressable,
@@ -300,13 +302,14 @@ export function ShimmeringWorkContent(props: {
 
   // The React Compiler memoizes these, so re-renders don't rebuild the native
   // animation nodes.
+  const layoutSign = I18nManager.isRTL ? -1 : 1;
   const sweepTranslateX = progress.interpolate({
     inputRange: [0, 1],
-    outputRange: [-SHIMMER_WIDTH, contentWidth],
+    outputRange: [-SHIMMER_WIDTH * layoutSign, contentWidth * layoutSign],
   });
   const counterSweepTranslateX = progress.interpolate({
     inputRange: [0, 1],
-    outputRange: [SHIMMER_WIDTH, -contentWidth],
+    outputRange: [SHIMMER_WIDTH * layoutSign, -contentWidth * layoutSign],
   });
 
   return (
@@ -870,7 +873,11 @@ function HighlightedCodeText({
     ];
   });
   return (
-    <Text selectable className="font-mono text-2xs leading-normal text-foreground">
+    <Text
+      style={LTR_TEXT_STYLE}
+      selectable
+      className="font-mono text-2xs leading-normal text-foreground"
+    >
       {highlighted ?? code}
     </Text>
   );
@@ -1068,7 +1075,10 @@ const ThreadWorkLogRow = function ThreadWorkLogRow(
               : null;
   const exitLine =
     failedExitCode === null ? null : (
-      <Text className="mt-1.5 font-mono text-2xs leading-normal text-danger-foreground">
+      <Text
+        style={LTR_TEXT_STYLE}
+        className="mt-1.5 font-mono text-2xs leading-normal text-danger-foreground"
+      >
         exit {failedExitCode}
       </Text>
     );
@@ -1323,7 +1333,10 @@ const ThreadWorkLogRow = function ThreadWorkLogRow(
                           : null;
                   return language ? (
                     <View key={key}>
-                      <Text className="font-mono text-2xs leading-normal text-foreground-muted">
+                      <Text
+                        style={LTR_TEXT_STYLE}
+                        className="font-mono text-2xs leading-normal text-foreground-muted"
+                      >
                         {key}
                       </Text>
                       <ToolCodeText
@@ -1344,6 +1357,7 @@ const ThreadWorkLogRow = function ThreadWorkLogRow(
                     /* oxlint-disable react/no-array-index-key -- Log lines are stateless positions within this output. */ typeof line ===
                     "string" ? (
                       <Text
+                        style={LTR_TEXT_STYLE}
                         key={`${index}:${line}`}
                         selectable
                         className="font-mono text-2xs leading-normal text-foreground"
@@ -1359,7 +1373,11 @@ const ThreadWorkLogRow = function ThreadWorkLogRow(
                     ) /* oxlint-enable react/no-array-index-key */,
                 )
             ) : fullDetail ? (
-              <Text selectable className="font-mono text-2xs leading-normal text-foreground-muted">
+              <Text
+                style={LTR_TEXT_STYLE}
+                selectable
+                className="font-mono text-2xs leading-normal text-foreground-muted"
+              >
                 {isJsonToolText(fullDetail) ? (
                   <ToolCodeText code={fullDetail} language="json" theme={props.themeAppearance} />
                 ) : (
@@ -1369,6 +1387,7 @@ const ThreadWorkLogRow = function ThreadWorkLogRow(
             ) : null}
             {fetchedOutput ? (
               <Text
+                style={LTR_TEXT_STYLE}
                 selectable
                 className={cn(
                   "font-mono text-2xs leading-normal text-foreground-muted",

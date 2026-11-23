@@ -61,6 +61,7 @@ export default function ReadOnlySourcePreview(props: {
   return (
     <DiffWorkerPoolProvider>
       <div
+        dir="ltr"
         ref={wrapper}
         className="contents"
         onCopy={copySelection}

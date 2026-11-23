@@ -190,7 +190,7 @@ export function ThreadAutomationsPanel(props: {
               <CalendarClockIcon className={THREAD_DETAILS_PANEL_ICON_CLASS} />
               <span
                 className={cn(
-                  "absolute -right-1 -top-1 size-1.5 rounded-full",
+                  "absolute -end-1 -top-1 size-1.5 rounded-full",
                   STATUS_DOT_CLASS[task.lastRunStatus],
                 )}
                 aria-hidden
@@ -205,7 +205,7 @@ export function ThreadAutomationsPanel(props: {
                   {taskScheduleLine(task, timestampFormat, tasksQuery.data?.timeZone, m)}
                 </p>
               </TooltipTrigger>
-              <TooltipPopup side="left">
+              <TooltipPopup side="inline-start">
                 <p className="font-medium">{task.title}</p>
                 <p className="text-muted-foreground">
                   {taskScheduleLine(task, timestampFormat, tasksQuery.data?.timeZone, m)}

@@ -486,6 +486,7 @@ function ProjectScriptEditorForm({
                 <T>Keybinding</T>
               </Label>
               <Input
+                dir="ltr"
                 disabled={!canWriteSettings}
                 id="script-keybinding"
                 placeholder={gt("Press shortcut")}
@@ -495,7 +496,7 @@ function ProjectScriptEditorForm({
               />
               <p className="text-xs text-muted-foreground">
                 <T>
-                  Press a shortcut. Use <code>Backspace</code> to clear. Shortcuts are
+                  Press a shortcut. Use <code dir="ltr">Backspace</code> to clear. Shortcuts are
                   environment-wide. Projects using the same action share its shortcut.
                 </T>
               </p>
@@ -505,6 +506,7 @@ function ProjectScriptEditorForm({
                 <T>Command</T>
               </Label>
               <Textarea
+                dir="ltr"
                 id="script-command"
                 // oxlint-disable-next-line t3code/no-untranslated-copy -- example shell command
                 placeholder="bun test"
@@ -517,6 +519,7 @@ function ProjectScriptEditorForm({
                 <T>Preview URL (optional)</T>
               </Label>
               <Input
+                dir="ltr"
                 id="script-preview-url"
                 placeholder="http://localhost:5173"
                 value={previewUrl}
@@ -590,7 +593,7 @@ function ProjectScriptEditorForm({
           <Button
             type="button"
             variant="destructive-outline"
-            className="mr-auto"
+            className="me-auto"
             disabled={isSaving || !canEditActions}
             onClick={() => onRequestDelete(name)}
           >

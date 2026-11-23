@@ -1143,7 +1143,7 @@ function OpenCommandPaletteDialog(props: {
       const disabledHint = readiness.hint;
 
       const titleTrailingContent = readiness.ready ? undefined : (
-        <span className="ml-auto">
+        <span className="ms-auto">
           <Tooltip>
             <TooltipTrigger
               render={
@@ -1158,7 +1158,7 @@ function OpenCommandPaletteDialog(props: {
                 </Button>
               }
             />
-            <TooltipPopup align="end" side="left">
+            <TooltipPopup align="end" side="inline-start">
               {disabledHint ??
                 gt("Open Settings -> Source control & issues to configure this provider.")}
             </TooltipPopup>
@@ -2517,7 +2517,7 @@ function OpenCommandPaletteDialog(props: {
               description: gt("Open a folder or clone a repository"),
               icon: <FolderPlusIcon className={ITEM_ICON_CLASS} />,
               titleTrailingContent: (
-                <ChevronRightIcon className="-me-0.5 ms-auto size-4 shrink-0 text-muted-foreground/70" />
+                <ChevronRightIcon className="-me-0.5 ms-auto size-4 shrink-0 text-muted-foreground/70 rtl:-scale-x-100" />
               ),
               keepOpen: true,
               run: async () => {
@@ -3097,10 +3097,11 @@ function OpenCommandPaletteDialog(props: {
       footerTrailing={footerTrailing}
       inputAccessory={inputAccessory}
       inputProps={{
+        dir: isBrowsing || addProjectCloneFlow?.step === "repository" ? "ltr" : undefined,
         className: hasHighlightedNewProjectItem
-          ? "*:data-[slot=autocomplete-input]:pe-38!"
+          ? "pe-35!"
           : addProjectCloneFlow?.step === "repository" || newProjectFlow !== null
-            ? "*:data-[slot=autocomplete-input]:pe-32!"
+            ? "pe-29!"
             : isBrowsing
               ? browseInputEndPaddingClass({
                   willCreateProjectPath,
@@ -3118,7 +3119,7 @@ function OpenCommandPaletteDialog(props: {
                   aria-label={gt("Back")}
                   onClick={popView}
                 >
-                  <ArrowLeftIcon />
+                  <ArrowLeftIcon className="rtl:-scale-x-100" />
                 </button>
               ),
             }

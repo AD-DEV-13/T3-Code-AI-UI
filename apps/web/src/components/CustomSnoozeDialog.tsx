@@ -252,7 +252,7 @@ function CustomSnoozeDialog() {
             <Button
               type="button"
               variant="ghost-muted"
-              className="sm:mr-auto"
+              className="sm:me-auto"
               onClick={() => {
                 finish(null);
                 void navigate({

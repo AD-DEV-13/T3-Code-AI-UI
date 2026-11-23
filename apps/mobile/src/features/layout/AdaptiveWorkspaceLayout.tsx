@@ -28,6 +28,7 @@ import {
   type ReactNode,
 } from "react";
 import {
+  I18nManager,
   BackHandler,
   Keyboard,
   Platform,
@@ -351,9 +352,13 @@ function AdaptiveWorkspaceLayoutContent(
     setWindowHinge(nextWindow);
   };
   const layout = useMemo(() => {
+    const leadingHinge =
+      hinge && I18nManager.isRTL
+        ? { x: viewportWidth - hinge.x - hinge.width, width: hinge.width }
+        : hinge;
     const aligned = alignListPaneToHinge({
       layout: baseLayout,
-      hinge,
+      hinge: leadingHinge,
       viewportWidth,
       leadingWidth: navigationRailWidth,
     });
@@ -868,8 +873,9 @@ function AdaptiveWorkspaceLayoutContent(
     ),
   }));
   // How far the strip has slid: 0 with the sidebar shown, minus its width with it gone.
+  const layoutSign = I18nManager.isRTL ? -1 : 1;
   const stripOffset = useDerivedValue(() =>
-    stripSidebar ? renderedSidebarWidth.value - sidebarSlotWidth : 0,
+    stripSidebar ? (renderedSidebarWidth.value - sidebarSlotWidth) * layoutSign : 0,
   );
   const sidebarAnimatedStyle = useAnimatedStyle(() => ({
     // Fading a UIKit glass ancestor can leave remounted header effects missing.

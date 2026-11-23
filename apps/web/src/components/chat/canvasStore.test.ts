@@ -58,6 +58,36 @@ describe("chat canvas model", () => {
     expect(model.detailsCardMode).toBe("popover");
   });
 
+  it("mirrors details-card collision bounds to the left edge in RTL", () => {
+    const model = resolveChatCanvasModel({
+      measurements: { ...measurements(1600, 900), rtl: true },
+      detailsCardMeasurement: { threadRef, width: 280, fullContentHeight: 300 },
+      threadRef,
+      preview: { ...preview, position: { x: 12, y: 12 }, lastInteraction: "resize" },
+      detailsCardInlineOpen: true,
+    });
+    expect(model.preferredDetailsCard?.x).toBe(12);
+    expect(model.layout.overlapsDetailsCard).toBe(true);
+    expect(model.detailsCardMode).toBe("popover");
+  });
+
+  it("preserves physical preview x in RTL when composer lift narrows the preview width", () => {
+    const model = resolveChatCanvasModel({
+      measurements: { ...measurements(1600, 900), composerHeight: 650, rtl: true },
+      detailsCardMeasurement: null,
+      threadRef,
+      preview: {
+        key: "browser:one",
+        width: 600,
+        position: { x: 300, y: 12 },
+        source: { width: 1600, height: 900 },
+        lastInteraction: "resize",
+      },
+      detailsCardInlineOpen: false,
+    });
+    expect(model.layout.frame?.x).toBe(300);
+  });
+
   it("ignores a details card measured for another thread", () => {
     const model = resolveChatCanvasModel({
       measurements: measurements(1100, 300),

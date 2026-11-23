@@ -1,6 +1,7 @@
 import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
 import { DownloadIcon, CopyIcon, CheckIcon, Code2Icon, EyeIcon, Table2Icon } from "lucide-react";
-import { msg, T, useGT, useMessages, Var } from "gt-react";
+import { msg, T, useGT, useLocale, useMessages, Var } from "gt-react";
+import { localeDirection } from "~/i18n/locales";
 import { m, type MessageResolver } from "~/i18n/messages";
 import { namedClipboardTarget, useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { Spinner } from "~/components/ui/spinner";
@@ -878,6 +879,7 @@ function EditableFileSurface({
   onPendingChange,
   onEditorChange,
 }: EditableFileSurfaceProps) {
+  const locale = useLocale();
   const messages = useMessages();
   const addReviewComment = useComposerDraftStore((store) => store.addReviewComment);
   const removeReviewComment = useComposerDraftStore((store) => store.removeReviewComment);
@@ -1072,7 +1074,7 @@ function EditableFileSurface({
 
   return (
     <EditProvider createEditor={createFileEditor}>
-      <div ref={surfaceRef} className="flex min-h-0 flex-1">
+      <div dir="ltr" ref={surfaceRef} className="flex min-h-0 flex-1">
         <Virtualizer
           className="file-preview-virtualizer min-h-0 flex-1 overflow-auto"
           config={{
@@ -1109,7 +1111,7 @@ function EditableFileSurface({
               );
               if (entries.length === 0) return null;
               return (
-                <div className="py-1">
+                <div dir={localeDirection(locale)} className="py-1">
                   {entries.map((entry) => (
                     <DiffCommentAnnotation
                       key={entry.id}
@@ -1822,7 +1824,10 @@ export default function FilePreviewPanel({
                   <p className="text-muted-foreground">
                     <T>
                       Attempted path
-                      <code className="block break-all font-mono text-foreground select-all">
+                      <code
+                        dir="ltr"
+                        className="block break-all font-mono text-foreground select-all"
+                      >
                         <Var>{attemptedPath}</Var>
                       </code>
                     </T>
@@ -1832,7 +1837,7 @@ export default function FilePreviewPanel({
                   <p className="text-muted-foreground">
                     <T>
                       Workspace folder:{" "}
-                      <code className="break-all font-mono select-all">
+                      <code dir="ltr" className="break-all font-mono select-all">
                         <Var>{file.readError?.cwd ?? cwd}</Var>
                       </code>
                       . Check the link's path or locate the file in Files.

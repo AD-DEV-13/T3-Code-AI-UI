@@ -2752,7 +2752,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         {
           id: "reply-to",
           variant: "default",
-          icon: <ReplyIcon />,
+          icon: <ReplyIcon className="rtl:-scale-x-100" />,
           title: replyTo.subagents
             ? gt("Replying to {titles}", {
                 titles: replyTo.subagents.map((subagent) => subagent.title).join(", "),
@@ -3748,7 +3748,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   type="button"
                   data-chat-composer-transition-prompt="true"
                   className={cn(
-                    "min-w-0 flex-1 truncate bg-transparent p-0 text-left text-sm focus:outline-none",
+                    "min-w-0 flex-1 truncate bg-transparent p-0 text-start text-sm focus:outline-none",
                     prompt.trim() ? "text-foreground" : "text-placeholder",
                   )}
                   onPointerDown={(event) => event.preventDefault()}
@@ -3971,7 +3971,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                           type="button"
                           tabIndex={-1}
                           aria-label={gt("Use suggested prompt")}
-                          className="pointer-events-auto ml-2 inline-flex cursor-pointer rounded align-[1px] [&:hover_kbd]:text-foreground"
+                          className="pointer-events-auto ms-2 inline-flex cursor-pointer rounded align-[1px] [&:hover_kbd]:text-foreground"
                           onPointerDown={(event) => event.preventDefault()}
                           onClick={() => {
                             const accepted = promptSuggestionToAccept(
@@ -3996,7 +3996,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 {showMobilePendingAnswerActions ? (
                   <div
                     data-chat-composer-mobile-pending-actions="true"
-                    className="absolute bottom-0 right-0 flex items-center justify-end gap-1"
+                    className="absolute bottom-0 end-0 flex items-center justify-end gap-1"
                   >
                     <ComposerPrimaryActions
                       compact

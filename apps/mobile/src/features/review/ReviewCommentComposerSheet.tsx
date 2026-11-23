@@ -206,6 +206,7 @@ export function ReviewCommentComposerSheet(props: ReviewCommentComposerSheetProp
 
             <View className="overflow-hidden rounded-[22px] border border-border bg-card">
               <ScrollView
+                style={{ direction: "ltr" }}
                 horizontal
                 bounces={false}
                 keyboardShouldPersistTaps="always"
