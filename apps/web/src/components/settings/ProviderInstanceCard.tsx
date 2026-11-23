@@ -20,6 +20,7 @@ import { Fragment, useState, type ReactElement, type ReactNode } from "react";
 import { T, useGT, useMessages, Var } from "gt-react";
 import {
   isProviderDriverKind,
+  localAcpProviderIconUrl,
   resolveProviderInstanceEnabled,
   type ProviderInstanceConfig,
   type ProviderInstanceEnvironmentVariable,
@@ -995,7 +996,7 @@ export function ProviderInstanceCard({
       }
       acpRegistryIconUrl={
         readConfigString(instance.config, "source") === "local"
-          ? undefined
+          ? (localAcpProviderIconUrl(instance.config) ?? undefined)
           : (readConfigString(instance.config, "registryIconUrl") ?? undefined)
       }
       showBadge={Boolean(accentColor)}

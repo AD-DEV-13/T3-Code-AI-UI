@@ -41,6 +41,23 @@ export function resolveOfficialAcpRegistryIconUrl(icon: string | null | undefine
   }
 }
 
+/** A local ACP instance has no registry icon, so a known command keeps its own brand mark. */
+export const OH_MY_PI_ICON_URL = "https://omp.sh/favicon.svg";
+
+/** The brand mark for a local ACP command config, or null when the command is unknown. */
+export function localAcpProviderIconUrl(config: unknown): string | null {
+  if (config === null || typeof config !== "object") return null;
+  const entry = config as Record<string, unknown>;
+  if (entry.source !== "local") return null;
+  const commandPath = typeof entry.commandPath === "string" ? entry.commandPath : "";
+  const commandArgs = Array.isArray(entry.commandArgs) ? entry.commandArgs : [];
+  // Same name the driver's OMP matcher accepts: bare "omp", a path, or omp.exe / omp.cmd.
+  const binary = (commandPath.split(/[\\/]/u).at(-1) ?? "")
+    .toLowerCase()
+    .replace(/\.(?:exe|cmd)$/u, "");
+  return binary === "omp" && commandArgs[0] === "acp" ? OH_MY_PI_ICON_URL : null;
+}
+
 export const AcpRegistryDistribution = Schema.Literals(["binary", "npx", "uvx"]);
 export type AcpRegistryDistribution = typeof AcpRegistryDistribution.Type;
 
