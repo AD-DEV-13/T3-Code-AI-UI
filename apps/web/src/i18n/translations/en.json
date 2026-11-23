@@ -12795,5 +12795,7 @@
   "99d51127f573296b": "Another account",
   "8ec2c57414669b79": "Connect a second {tracker} workspace or user.",
   "99963c0142e17f00": "For the new {tracker} account.",
-  "6d8e4ebc889bace9": "Add account"
+  "6d8e4ebc889bace9": "Add account",
+  "28802448438c2f76": "Run once if missed",
+  "cb6a9fca98dcf52b": "If T3 Code was off or asleep at that time, run once when it is back instead of waiting for the next time."
 }

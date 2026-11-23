@@ -12786,5 +12786,7 @@
   "99d51127f573296b": "Weiteres Konto",
   "8ec2c57414669b79": "Verbinde einen zweiten {tracker}-Workspace oder -Nutzer.",
   "99963c0142e17f00": "Für das neue {tracker}-Konto.",
-  "6d8e4ebc889bace9": "Konto hinzufügen"
+  "6d8e4ebc889bace9": "Konto hinzufügen",
+  "28802448438c2f76": "Einmal nachholen, falls verpasst",
+  "cb6a9fca98dcf52b": "Wenn T3 Code zu diesem Zeitpunkt aus war oder geschlafen hat, läuft die Aufgabe einmal, sobald es wieder läuft, statt auf den nächsten Termin zu warten."
 }

@@ -12793,5 +12793,7 @@
   "99d51127f573296b": "Ett konto till",
   "8ec2c57414669b79": "Anslut en andra {tracker}-arbetsyta eller användare.",
   "99963c0142e17f00": "För det nya {tracker}-kontot.",
-  "6d8e4ebc889bace9": "Lägg till konto"
+  "6d8e4ebc889bace9": "Lägg till konto",
+  "28802448438c2f76": "Kör en gång om missad",
+  "cb6a9fca98dcf52b": "Om T3 Code var avstängt eller i viloläge vid den tiden körs uppgiften en gång när det är tillbaka i stället för att vänta till nästa gång."
 }
