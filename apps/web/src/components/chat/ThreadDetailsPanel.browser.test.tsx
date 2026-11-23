@@ -189,6 +189,7 @@ function Panel({
         onComposerFocusRequest={noop}
         onRunProjectScript={noop}
         onAddProjectScript={scriptResult}
+        onImportProjectScript={scriptResult}
         onUpdateProjectScript={scriptResult}
         onDeleteProjectScript={scriptResult}
         usage={{} as never}
