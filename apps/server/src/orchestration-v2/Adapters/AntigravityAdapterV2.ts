@@ -32,6 +32,7 @@ import {
 import {
   ANTIGRAVITY_SUBAGENT_BATCH_TITLE,
   antigravitySubagentLaunches,
+  antigravitySwarmAtWork,
   describeAntigravitySubagentLaunches,
   readAntigravityChildrenAtWork,
   readAntigravityPendingReply,
@@ -306,6 +307,8 @@ export function makeAntigravityAcpAdapterFlavor(
       : {
           watchPromptOutcome: (sessionId: string) =>
             watchAntigravityPromptOutcome(profileDirectory, sessionId),
+          detachedWorkOutlivingPrompt: (sessionId: string) =>
+            antigravitySwarmAtWork(profileDirectory, sessionId),
           subagentsOutlivingPrompt: ({ sessionId, nativeTaskIds }) =>
             readAntigravityChildrenAtWork({
               profileDirectory,
