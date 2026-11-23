@@ -20,6 +20,7 @@ import type { EnvironmentRegistry } from "../connection/registry.ts";
 import {
   canNavigateUp,
   getBrowseDirectoryPath,
+  ensureBrowseDirectoryPath,
   getBrowseLeafPathSegment,
   getBrowseParentPath,
   hasTrailingPathSeparator,
@@ -68,13 +69,28 @@ export function resolveFilesystemReadAccess(
   };
 }
 
-export function getFilesystemBrowsePath(query: string, platform = "", enabled = true) {
-  const isBrowsing = enabled && isFilesystemBrowseQuery(query, platform);
+export function getFilesystemBrowsePath(
+  query: string,
+  platform = "",
+  enabled = true,
+  searchBaseDirectory?: string,
+) {
+  const isSearch =
+    enabled &&
+    searchBaseDirectory !== undefined &&
+    query.trim().length > 0 &&
+    !isFilesystemBrowseQuery(query, platform);
+  const isBrowsing = enabled && (isSearch || isFilesystemBrowseQuery(query, platform));
   // A bare drive has no separator, so it would otherwise filter its own listing by "D:".
   const browseQuery = /^[a-zA-Z]:$/.test(query) ? `${query}\\` : query;
-  const directoryPath = isBrowsing ? getBrowseDirectoryPath(browseQuery) : "";
-  const filterQuery =
-    isBrowsing && !hasTrailingPathSeparator(browseQuery)
+  const directoryPath = isSearch
+    ? ensureBrowseDirectoryPath(searchBaseDirectory || "~/")
+    : isBrowsing
+      ? getBrowseDirectoryPath(browseQuery)
+      : "";
+  const filterQuery = isSearch
+    ? query.trim()
+    : isBrowsing && !hasTrailingPathSeparator(browseQuery)
       ? getBrowseLeafPathSegment(browseQuery)
       : "";
   const parentPath = isBrowsing ? getBrowseParentPath(directoryPath) : null;
@@ -86,6 +102,17 @@ export function getFilesystemBrowsePath(query: string, platform = "", enabled = 
     parentPath,
     canBrowseUp: isBrowsing && canNavigateUp(directoryPath),
   };
+}
+
+export function findExactFilesystemBrowseEntry(
+  entries: ReadonlyArray<FilesystemBrowseEntry>,
+  query: string,
+) {
+  if (!query.trim()) return null;
+  const fullPathMatch = entries.find((entry) => entry.fullPath === query.trim());
+  if (fullPathMatch) return fullPathMatch;
+  const matches = entries.filter((entry) => entry.name.split(/[\\/]/).at(-1) === query);
+  return matches.length === 1 ? matches[0]! : null;
 }
 
 export function filterFilesystemBrowseEntries(
