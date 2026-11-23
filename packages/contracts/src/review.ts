@@ -3,6 +3,20 @@ import { GitRefName, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { GitCommandError } from "./git.ts";
 import { VcsError } from "./vcs.ts";
 
+export const ReviewRepositoriesInput = Schema.Struct({ cwd: TrimmedNonEmptyString });
+export type ReviewRepositoriesInput = typeof ReviewRepositoriesInput.Type;
+export const ReviewRepositoriesResult = Schema.Struct({
+  repositories: Schema.Array(
+    Schema.Struct({
+      cwd: TrimmedNonEmptyString,
+      path: Schema.String,
+      name: Schema.NonEmptyString,
+      branch: Schema.NullOr(TrimmedNonEmptyString),
+    }),
+  ),
+  truncated: Schema.Boolean,
+});
+export type ReviewRepositoriesResult = typeof ReviewRepositoriesResult.Type;
 // An object id or HEAD, never an option-looking ref, since it is passed to git as a revision.
 const ReviewMergeBase = Schema.String.check(
   Schema.isPattern(/^(?:[0-9a-f]{40}|[0-9a-f]{64}|HEAD)$/),

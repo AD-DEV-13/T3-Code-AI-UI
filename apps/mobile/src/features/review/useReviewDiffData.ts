@@ -148,6 +148,7 @@ export function useReviewDiffData(input: {
   readonly threadKey: string | null;
   readonly environmentId: EnvironmentId | undefined;
   readonly cwd: string | null;
+  readonly repositoryPath?: string;
   readonly selectedSection: ReviewSectionItem | null;
   readonly draftMessage: string;
   readonly draftContext: OrchestrationMessageContext | undefined;
@@ -288,8 +289,15 @@ export function useReviewDiffData(input: {
     if (!selectedSectionId || inlineReviewComments.length === 0) {
       return EMPTY_INLINE_REVIEW_COMMENTS;
     }
-    return inlineReviewComments.filter((comment) => comment.sectionId === selectedSectionId);
-  }, [inlineReviewComments, selectedSectionId]);
+    const prefix = input.repositoryPath ? input.repositoryPath + "/" : "";
+    return inlineReviewComments
+      .filter((comment) => comment.sectionId === selectedSectionId)
+      .map((comment) =>
+        prefix && comment.filePath.startsWith(prefix)
+          ? { ...comment, filePath: comment.filePath.slice(prefix.length) }
+          : comment,
+      );
+  }, [inlineReviewComments, selectedSectionId, input.repositoryPath]);
   const shownDiff = useMemo(
     () => filterPullRequestTestFiles(parsedDiff, hideTestFiles),
     [parsedDiff, hideTestFiles],

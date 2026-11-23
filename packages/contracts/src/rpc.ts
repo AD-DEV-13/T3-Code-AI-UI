@@ -173,6 +173,8 @@ import {
   VcsStatusStreamEvent,
 } from "./git.ts";
 import {
+  ReviewRepositoriesInput,
+  ReviewRepositoriesResult,
   ReviewBranchCommitsInput,
   ReviewBranchCommitsResult,
   ReviewDiffFileContentsInput,
@@ -547,6 +549,7 @@ export const WS_METHODS = {
   gitResolvePullRequest: "git.resolvePullRequest",
   gitPreparePullRequestThread: "git.preparePullRequestThread",
 
+  reviewGetRepositories: "review.getRepositories",
   reviewGetBranchCommits: "review.getBranchCommits",
   reviewGetDiffPreview: "review.getDiffPreview",
   reviewGetDiffFileContents: "review.getDiffFileContents",
@@ -1910,6 +1913,12 @@ const WsVcsInitRpc = Rpc.make(WS_METHODS.vcsInit, {
   error: Schema.Union([VcsError, EnvironmentAuthorizationError]),
 });
 
+const WsReviewGetRepositoriesRpc = Rpc.make(WS_METHODS.reviewGetRepositories, {
+  payload: ReviewRepositoriesInput,
+  success: ReviewRepositoriesResult,
+  error: Schema.Union([ReviewDiffPreviewError, EnvironmentAuthorizationError]),
+});
+
 const WsReviewGetBranchCommitsRpc = Rpc.make(WS_METHODS.reviewGetBranchCommits, {
   payload: ReviewBranchCommitsInput,
   success: ReviewBranchCommitsResult,
@@ -2656,6 +2665,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsVcsCreateRefRpc,
   WsVcsSwitchRefRpc,
   WsVcsInitRpc,
+  WsReviewGetRepositoriesRpc,
   WsReviewGetBranchCommitsRpc,
   WsReviewGetDiffPreviewRpc,
   WsReviewGetDiffFileContentsRpc,
