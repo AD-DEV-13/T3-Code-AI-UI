@@ -3168,6 +3168,7 @@ export function makeClaudeUserMessage(input: {
   readonly skills?: ReadonlyMap<string, ClaudeSkillTarget>;
   readonly skillMentionsFrom?: number;
   readonly uuid?: SDKUserMessage["uuid"];
+  readonly origin?: SDKUserMessage["origin"] | undefined;
 }): SDKUserMessage {
   // Claude expands a skill only when `/name` starts the last text block.
   // Keep the whole request before that block; see ClaudeSkillDispatch.
@@ -3195,7 +3196,19 @@ export function makeClaudeUserMessage(input: {
     parent_tool_use_id: null,
     ...(input.priority === undefined ? {} : { priority: input.priority }),
     ...(input.uuid === undefined ? {} : { uuid: input.uuid }),
+    ...(input.origin === undefined ? {} : { origin: input.origin }),
   };
+}
+
+// Claude Code arms artifact comment auto-replies and the `ultracode` keyword only for human-origin prompts.
+function claudePromptOrigin(
+  message: ProviderAdapter.ProviderAdapterV2TurnMessage,
+): SDKUserMessage["origin"] {
+  return message.createdBy === "user" &&
+    (message.creationSource === "web" || message.creationSource === "mobile") &&
+    message.scheduledTaskId === undefined
+    ? { kind: "human" }
+    : undefined;
 }
 
 // Never decode streams just to enforce a provider limit. Only accept an explicit,
@@ -3377,6 +3390,7 @@ const makeClaudeUserMessageWithAttachments = Effect.fnUntraced(function* (input:
   readonly attachments: ReadonlyArray<ChatAttachment>;
   readonly priority?: SDKUserMessage["priority"];
   readonly uuid?: SDKUserMessage["uuid"];
+  readonly origin?: SDKUserMessage["origin"] | undefined;
   readonly attachmentsDir: string;
   readonly fileSystem: FileSystem.FileSystem;
   readonly pdfReservation: Effect.Success<ReturnType<typeof reserveClaudePdfBudget>>;
@@ -3392,6 +3406,7 @@ const makeClaudeUserMessageWithAttachments = Effect.fnUntraced(function* (input:
         : { skillMentionsFrom: input.skillMentionsFrom }),
       ...(input.priority === undefined ? {} : { priority: input.priority }),
       ...(input.uuid === undefined ? {} : { uuid: input.uuid }),
+      ...(input.origin === undefined ? {} : { origin: input.origin }),
     });
     const bytes = Buffer.byteLength(encodeClaudeJson(message.message.content));
     input.pdfReservation.budget.pending.bytes += bytes;
@@ -3557,6 +3572,7 @@ const makeClaudeUserMessageWithAttachments = Effect.fnUntraced(function* (input:
     parent_tool_use_id: null,
     ...(input.priority === undefined ? {} : { priority: input.priority }),
     ...(input.uuid === undefined ? {} : { uuid: input.uuid }),
+    ...(input.origin === undefined ? {} : { origin: input.origin }),
   } satisfies SDKUserMessage;
 });
 
@@ -13965,6 +13981,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                       pdfReservation,
                       ...(skills === undefined ? {} : { skills }),
                       uuid: promptUuid,
+                      origin: claudePromptOrigin(turnInput.message),
                     }).pipe(
                       Effect.map((message) => {
                         const withContext = withClaudeAppContext(
@@ -14524,6 +14541,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               // "now" makes Claude Code cancel the tool calls in flight and report them as a user refusal.
               priority: "next",
               uuid: steerUuid,
+              origin: claudePromptOrigin(turnInput.message),
               attachmentsDir,
               fileSystem,
               pdfReservation,
