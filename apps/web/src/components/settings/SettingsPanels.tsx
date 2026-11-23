@@ -544,6 +544,9 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.sidebarWorkingShelfEnabled !== DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled
       ? [gt("Working section")]
       : []),
+    ...(settings.sidebarSettledShelfFixed !== DEFAULT_UNIFIED_SETTINGS.sidebarSettledShelfFixed
+      ? [gt("Keep Settled at bottom")]
+      : []),
     ...(settings.sidebarAutoSettleAfterDays !== DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays
       ? [gt("Auto-settle inactive threads")]
       : []),
@@ -735,6 +738,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarProjectGroupingMode: DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode,
       sidebarProjectSortOrder: DEFAULT_UNIFIED_SETTINGS.sidebarProjectSortOrder,
       sidebarWorkingShelfEnabled: DEFAULT_UNIFIED_SETTINGS.sidebarWorkingShelfEnabled,
+      sidebarSettledShelfFixed: DEFAULT_UNIFIED_SETTINGS.sidebarSettledShelfFixed,
       sidebarAutoSettleAfterDays: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleAfterDays,
       sidebarAutoSettleKeepPullRequests: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleKeepPullRequests,
       sidebarAutoSettleOnMerge: DEFAULT_UNIFIED_SETTINGS.sidebarAutoSettleOnMerge,
@@ -954,8 +958,9 @@ export function GeneralSettingsPanel() {
           {...setting("working-shelf")}
           description={
             <T>
-              Fold working and monitoring threads into a Working section. They return to the top of
-              the inbox when they need you. The boring sidebar in Labs has no Working section.
+              Fold working and monitoring threads into a Working section. Find threads that need an
+              answer, approval, or plan review in Input. The boring sidebar in Labs has no Working
+              section.
             </T>
           }
           resetAction={
@@ -978,6 +983,34 @@ export function GeneralSettingsPanel() {
                 updateSettings({ sidebarWorkingShelfEnabled: Boolean(checked) })
               }
               aria-label={gt("Working section")}
+            />
+          }
+        />
+        <SettingsRow
+          {...setting("fixed-settled-shelf")}
+          description={
+            <T>Keep Settled below Working and Snoozed instead of at the end of the main list.</T>
+          }
+          resetAction={
+            settings.sidebarSettledShelfFixed !==
+            DEFAULT_UNIFIED_SETTINGS.sidebarSettledShelfFixed ? (
+              <SettingResetButton
+                ariaLabel={gt("Reset settled section position to default")}
+                onClick={() =>
+                  updateSettings({
+                    sidebarSettledShelfFixed: DEFAULT_UNIFIED_SETTINGS.sidebarSettledShelfFixed,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.sidebarSettledShelfFixed}
+              onCheckedChange={(checked) =>
+                updateSettings({ sidebarSettledShelfFixed: Boolean(checked) })
+              }
+              aria-label={gt("Keep Settled at bottom")}
             />
           }
         />

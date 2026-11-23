@@ -198,7 +198,7 @@ export const animateSidebarLayoutChanges: AnimateLayoutChanges = (args) =>
 
 // Snoozed rows cannot accept drops without a wake time. Working rows only drag out as chat context.
 
-export type SidebarSection = "pinned" | "active" | "working" | "snoozed" | "settled";
+export type SidebarSection = "pinned" | "active" | "input" | "working" | "snoozed" | "settled";
 
 export function resolveSidebarThreadSection(input: {
   readonly snoozed: boolean;
@@ -218,6 +218,7 @@ export type SidebarListMarker =
   | "active-placeholder"
   | "settled-placeholder"
   | "pinned-divider"
+  | "input-header"
   | "working-header"
   | "snoozed-header"
   | "settled-header";
@@ -240,6 +241,7 @@ function sectionAtSidebarSlot(items: readonly SidebarListItem[], index: number):
     const item = items[i]!;
     if (item.kind !== "marker") continue;
     if (item.marker === "pinned-divider") section = "active";
+    else if (item.marker === "input-header") section = "input";
     else if (item.marker === "working-header") section = "working";
     else if (item.marker === "snoozed-header") section = "snoozed";
     else if (item.marker === "settled-header") section = "settled";
@@ -261,10 +263,16 @@ export function resolveSidebarDropTarget(
   const activeIndex = items.findIndex((item) => sidebarListItemId(item) === activeKey);
   const overIndex = items.findIndex((item) => sidebarListItemId(item) === overId);
   if (activeIndex === -1 || overIndex === -1 || items[activeIndex]?.kind !== "thread") return null;
+  const over = items[overIndex];
+  if (over?.kind === "marker" && over.marker === "input-header") return null;
   const moved = items.filter((_, index) => index !== activeIndex);
-  moved.splice(overIndex, 0, items[activeIndex]!);
-  const section = sectionAtSidebarSlot(moved, overIndex);
-  if (section === "working" || section === "snoozed") return null;
+  const slot =
+    over?.kind === "marker" && over.marker === "settled-header" && activeIndex > overIndex
+      ? overIndex + 1
+      : overIndex;
+  moved.splice(slot, 0, items[activeIndex]!);
+  const section = sectionAtSidebarSlot(moved, slot);
+  if (section === "input" || section === "working" || section === "snoozed") return null;
   const pinnedOrder: string[] = [];
   const activeOrder: string[] = [];
   let currentSection: SidebarSection = "pinned";
@@ -272,6 +280,7 @@ export function resolveSidebarDropTarget(
     if (item.kind === "marker") {
       if (item.marker === "pinned-divider") currentSection = "active";
       else if (
+        item.marker === "input-header" ||
         item.marker === "working-header" ||
         item.marker === "snoozed-header" ||
         item.marker === "settled-header"
@@ -312,7 +321,8 @@ export function resolveSidebarDropVerb(
   from: SidebarSection,
   to: SidebarSection | null,
 ): SidebarDropVerb | null {
-  if (to === null || to === from || to === "working" || to === "snoozed") return null;
+  if (to === null || to === from || to === "input" || to === "working" || to === "snoozed")
+    return null;
   if (to === "pinned") return "pin";
   if (to === "settled") return "settle";
   if (from === "pinned") return "unpin";
@@ -383,6 +393,7 @@ export function planSidebarThreadDrop(input: {
   readonly activeKeysById: ReadonlyMap<string, string | null | undefined>;
   readonly activeReorderableKeys?: ReadonlySet<string>;
   readonly activeTimeOrdered?: boolean;
+  readonly landsInInput?: boolean;
 }): SidebarThreadDropPlan {
   const {
     activeKey,
@@ -397,7 +408,8 @@ export function planSidebarThreadDrop(input: {
     activeKeysById,
     activeReorderableKeys,
   } = input;
-  if (activeSection === "working") return { kind: "none" };
+  if (activeSection === "input" || activeSection === "working") return { kind: "none" };
+  if (target.section === "active" && input.landsInInput) return { kind: "none" };
   if (input.supportsSettlement === false && (target.section === "settled" || activeSettled)) {
     return { kind: "none" };
   }
@@ -991,6 +1003,26 @@ export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): Si
     return thread.runtime.lastErrorClass === "usage_limit" ? "limited" : "failed";
   }
   return "ready";
+}
+
+export function resolveSidebarInboxSection(
+  thread: ThreadStatusInput & SidebarThreadStatusInput,
+  grouped: boolean,
+  working: boolean,
+): "active" | "input" | "working" {
+  if (!grouped) return "active";
+  const status = resolveSidebarThreadStatus(thread);
+  if (
+    status === "input" ||
+    status === "approval" ||
+    status === "request" ||
+    (thread.interactionMode === "plan" &&
+      !hasUnseenRunFailure(thread) &&
+      thread.hasActionableProposedPlan &&
+      isLatestRunSettled(thread.latestRun, thread.runtime))
+  )
+    return "input";
+  return working ? "working" : "active";
 }
 
 /** Sidebar row status: a failure the user has already opened settles to ready, like Done. */

@@ -205,6 +205,25 @@ describe("sidebar collision detection", () => {
     },
   );
 
+  it("ignores active rows clipped behind a fixed shelf", () => {
+    const args = collisionArgs();
+    const target = args.droppableRects.get(sidebarMarkerId("settled-header"))!;
+    const viewport = { getBoundingClientRect: () => ({ top: 100, bottom: 180 }) };
+    const node = { closest: () => viewport } as unknown as HTMLElement;
+    const containers = args.droppableContainers.map((container) => ({
+      ...container,
+      node: { current: container.id === "blocked" || container.id === "source" ? node : null },
+    }));
+    const input = {
+      ...args,
+      droppableContainers: containers,
+      pointerCoordinates: { x: 100, y: target.top + 10 },
+    };
+    expect(closestCenter(input)[0]?.id).toBe("blocked");
+    const detector = createSidebarCollisionDetection(() => true, { independentShelves: true });
+    expect(detector(input)[0]?.id).toBe(sidebarMarkerId("settled-header"));
+  });
+
   it("returns no collision if an unsupported target has no source fallback", () => {
     const args = collisionArgs();
     const detector = createSidebarCollisionDetection(() => false);
@@ -284,6 +303,57 @@ describe("sidebar drag projection", () => {
     }
     const lastIndex = items.length - 1;
     expect(strategy({ ...args, index: lastIndex })).toEqual(stationary);
+  });
+
+  it("keeps fixed panels still while Settled follows the active list", () => {
+    const items = [
+      pinnedHeader,
+      divider,
+      thread("a1", "active"),
+      thread("a2", "active"),
+      settledHeader,
+      thread("s", "settled"),
+      marker("input-header"),
+      thread("i", "input"),
+      marker("working-header"),
+      thread("w", "working"),
+      marker("snoozed-header"),
+      thread("z", "snoozed"),
+    ];
+    const args = layout(items, "a1", sidebarMarkerId("settled-header"));
+    const strategy = createSidebarSortingStrategy({
+      items,
+      settledOrder: ["a1", "s"],
+      settledExpanded: true,
+      independentShelves: true,
+    });
+    for (const index of [6, 7, 8, 9, 10, 11])
+      expect(strategy({ ...args, index })).toEqual(stationary);
+    expect(strategy({ ...args, index: 4 })?.y).toBe(-83);
+    expect(strategy({ ...args, index: 5 })?.y).toBe(-46);
+  });
+
+  it("keeps Settled fixed below Working when it is outside the main scroll", () => {
+    const items = [
+      pinnedHeader,
+      divider,
+      thread("a1", "active"),
+      thread("a2", "active"),
+      marker("working-header"),
+      thread("w", "working"),
+      settledHeader,
+      thread("s", "settled"),
+    ];
+    const args = layout(items, "a1", sidebarMarkerId("settled-header"));
+    const strategy = createSidebarSortingStrategy({
+      items,
+      settledOrder: ["a1", "s"],
+      settledExpanded: true,
+      independentShelves: true,
+      settledInMainList: false,
+    });
+    for (const index of [4, 5, 6]) expect(strategy({ ...args, index })).toEqual(stationary);
+    expect(strategy({ ...args, index: 7 })?.y).toBe(37);
   });
 
   const pinned = [
@@ -691,7 +761,7 @@ describe("lifted card clearance", () => {
     right: 260,
     width: 260,
   });
-  const apply = (cardTop: number, cardHeight: number, y: number, listTop = 136, offset = 32) =>
+  const apply = (cardTop: number, cardHeight: number, y: number, listTop = 136, minimumTop = 168) =>
     restrictBelowSidebarLabel(
       {
         transform: { ...stationary, y },
@@ -706,7 +776,7 @@ describe("lifted card clearance", () => {
         scrollableAncestorRects: [],
         windowRect: null,
       },
-      offset,
+      minimumTop,
     );
 
   it.each([36, 82])("keeps a %ipx row below empty Pins even past the top edge", (height) => {
@@ -721,8 +791,8 @@ describe("lifted card clearance", () => {
     expect(apply(511, 36, -200).y).toBe(-200);
   });
 
-  it("follows the list when it scrolls and includes content preceding Pins", () => {
-    expect(511 + apply(511, 36, -500, 96).y).toBe(128);
-    expect(511 + apply(511, 36, -500, 136, 114).y).toBe(250);
+  it("keeps the same pinned boundary for drags that start in different viewports", () => {
+    expect(511 + apply(511, 36, -500, 136, 168).y).toBe(168);
+    expect(511 + apply(511, 36, -500, 410, 168).y).toBe(168);
   });
 });

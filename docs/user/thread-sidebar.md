@@ -140,16 +140,21 @@ Threads that are working or waiting on work they will resume from move into a co
 **Working** section below the active list.
 That includes subagents, watched pull requests with checks still running, Claude monitors,
 and background commands or other monitors the agent says it is waiting on. A dev server or other process an agent leaves running does not keep a thread
-there. A thread returns to the top of the active list when it finishes, fails, or needs an approval or
-answer. The Working section lists the thread you last sent work to first. Pinned threads stay in
-the pinned section.
+there. A thread returns to the active list when it finishes or fails. The Working section lists
+the thread you last sent work to first. Pinned threads stay in the pinned section.
 
-This is on by default. Turn it off with **Settings → General → Working section** on web and desktop,
-or **Settings → General → Working section** on iOS and Android. Each device keeps its own
-choice.
+**Working section** is on by default. Turn it off under **Settings → General → Working section**.
+Each device keeps its own choice. On web and desktop, while this setting is on, threads that need
+an answer, approval, or plan review move into **Input** above Working. Both sections stay available
+while you scroll the active list. When the setting is off, or on native mobile, requests appear in
+the active list.
 
-While this is on, the active list is ordered by when each thread last came back to you, so you
-cannot drag or move threads within it. Your saved order returns when you turn it off.
+While **Working section** is on, the active list is ordered by when each thread last came back to you,
+so you cannot drag or move threads within it. Your saved order returns when you turn it off.
+
+On web and desktop, **Settled** appears at the end of the active list by default. Turn on
+**Settings → General → Keep Settled at bottom** to keep it visible below the other status sections.
+Each device remembers this setting separately.
 
 ### Group threads by project (beta)
 
@@ -161,7 +166,7 @@ close it. A closed folder shows how many threads it holds, and a dot when one of
 needs you. Use the pen button on a folder, or right-click it, to start a thread in that project.
 Pinned threads stay above the folders, and Snoozed and Settled stay below them. In this mode you
 can drag a thread onto the composer to mention it, but not within the sidebar, and the Working
-section is off. Each device keeps its own choice.
+and Input sections are off. Each device keeps its own choice.
 
 ## Settle finished work
 
