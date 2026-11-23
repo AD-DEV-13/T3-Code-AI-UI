@@ -29,6 +29,7 @@ import { msg, T, useGT, useMessages } from "gt-react-native";
 import type { ReactNode } from "react";
 import { useEffect, useEffectEvent, useRef, useState, type RefObject } from "react";
 import { Keyboard, Platform, View } from "react-native";
+import { KeyboardController } from "react-native-keyboard-controller";
 import { composerImageGallery } from "../../lib/composerImageGallery";
 import { filePreviewGallery } from "../../lib/filePreviewGallery";
 import { FilePreviewModal, type FilePreviewSource } from "../../components/ui/FilePreviewModal";
@@ -457,6 +458,9 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
     onChangeDraftMessage: (text) => setComposerDraftText(composerDraftKey, text),
     onChangeSelection: composerMenu.onSelectionChange,
   });
+  // Hiding the focused editor doesn't reliably close the Android IME. Let it finish closing first:
+  // the dictation bar's entering animation can drop while KeyboardStickyView tracks the IME.
+  const startDictation = () => voiceInput.startAfter(KeyboardController.dismiss());
   const isSubmissionLocked =
     props.interactionLocked === true || queuedEdit?.saving === true || voiceInput.blocksSubmission;
   const voicePresentation = resolveVoiceComposerPresentation(
@@ -1046,7 +1050,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
                   state={voiceInput.state}
                   isAvailable={voiceInput.isAvailable}
                   disabled={isSubmissionLocked}
-                  onStart={voiceInput.start}
+                  onStart={startDictation}
                   onCancel={voiceInput.cancel}
                 />
                 {showStopAction ? (
@@ -1113,7 +1117,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
                     presentation={voicePresentation}
                     isAvailable={voiceInput.isAvailable}
                     disabled={isSubmissionLocked}
-                    onStart={voiceInput.start}
+                    onStart={startDictation}
                     onConfirm={voiceInput.stop}
                     onCancel={voiceInput.cancel}
                   />
