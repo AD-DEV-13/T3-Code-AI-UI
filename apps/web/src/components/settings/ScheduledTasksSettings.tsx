@@ -37,6 +37,7 @@ import {
   type WebhookFilterDraft,
 } from "@t3tools/client-runtime/scheduled-task-webhook";
 import { scheduleTimeZoneLabel } from "@t3tools/client-runtime/scheduled-task-time-zone";
+import { supportsSharedSettingsSync } from "@t3tools/client-runtime/state/shared-settings";
 import { scheduledTaskWorktreeBaseRef } from "@t3tools/client-runtime/scheduled-task-worktree";
 import {
   MAX_WEBHOOK_DELIVERY_AGE_MINUTES,
@@ -66,6 +67,7 @@ import { useNowMinute } from "../../hooks/useNowMinute";
 import {
   useEnvironment,
   useEnvironmentHttpBaseUrl,
+  useEnvironments,
   type EnvironmentPresentation,
 } from "../../state/environments";
 import {
@@ -92,6 +94,7 @@ import { ManagedNotice } from "../ManagedPolicy";
 import { readEnvironmentScope } from "~/state/session";
 import { useSettingsScope } from "./SettingsScopeContext";
 import { EnvironmentRow, useEnvironmentTransportLabel } from "./EnvironmentRow";
+import { ScheduleTimeZoneRow } from "./ScheduleTimeZoneRow";
 import { SettingsGroup } from "./SettingsGroup";
 import { settingsScopeEnvironmentLabel, settingsScopeEnvironmentLabels } from "./settingsScopeAxis";
 import {
@@ -466,6 +469,15 @@ export function ScheduledTasksSettings(target: {
   const permittedEnvironments = connectedEnvironments.filter(
     (_entry, index) => createPermissions[index],
   );
+  // The schedule zone follows the traveler on every environment, not just the scoped ones.
+  const zoneEnvironments = useEnvironments().environments.filter(
+    (entry) =>
+      supportsSharedSettingsSync(entry) &&
+      entry.serverConfig?.environment.capabilities.scheduleTimeZone === true,
+  );
+  const scheduleZones = useAtomValue(
+    scheduledTasksListAtom(environmentIdsKey(zoneEnvironments.map((entry) => entry.environmentId))),
+  ).map((query) => AsyncResult.getOrElse(query, () => null)?.timeZone);
   const creationEnvironment =
     permittedEnvironments.find(
       (entry) => entry.environmentId === defaultEnvironment?.environmentId,
@@ -490,6 +502,11 @@ export function ScheduledTasksSettings(target: {
           </Button>
         }
       >
+        {zoneEnvironments.length > 0 ? (
+          <SettingsGroup className="mb-8">
+            <ScheduleTimeZoneRow environments={zoneEnvironments} scheduleZones={scheduleZones} />
+          </SettingsGroup>
+        ) : null}
         {scope.kind === "unavailable" ? (
           <SettingsSection title={gt("Unavailable selection")}>
             <SettingsRow title={scope.message} />

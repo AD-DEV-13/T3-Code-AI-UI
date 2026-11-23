@@ -4,10 +4,11 @@ import * as Dialog from "../../components/ui/Dialog";
 import { useAtomValue } from "@effect/atom-react";
 import {
   AuthOrchestrationOperateScope,
+  AuthSettingsWriteScope,
   clampManagedRuntimeMode,
   resolveProjectProviderInstanceEnabled,
 } from "@t3tools/contracts";
-import { readEnvironmentScope } from "../../state/session";
+import { readEnvironmentScope, useEnvironmentsWithScope } from "../../state/session";
 import type {
   EnvironmentId,
   ProjectId,
@@ -40,7 +41,13 @@ import {
   type WebhookFilterDraft,
 } from "@t3tools/client-runtime/scheduled-task-webhook";
 import { scheduledTaskWorktreeBaseRef } from "@t3tools/client-runtime/scheduled-task-worktree";
-import { scheduleTimeZoneLabel } from "@t3tools/client-runtime/scheduled-task-time-zone";
+import {
+  canonicalTimeZone,
+  deviceTimeZone,
+  scheduleTimeZoneLabel,
+  schedulesDifferFromDevice,
+} from "@t3tools/client-runtime/scheduled-task-time-zone";
+import { AsyncResult, Atom } from "effect/reactivity";
 import type { MessageResolver } from "../../i18n/messages";
 import { useRef, useState, type ReactNode } from "react";
 import { useFocusEffect, useNavigation, usePreventRemove } from "@react-navigation/native";
@@ -76,6 +83,8 @@ import { ScheduledTaskPromptField } from "./components/ScheduledTaskPromptField"
 import { useSettingsEnvironmentMenu } from "./components/SettingsEnvironmentFilterHeader";
 import { SettingsScreen } from "./components/SettingsScreen";
 import { SettingsSection } from "./components/SettingsSection";
+import { resolveMobileSettingsTargets, uniformMobileSetting } from "./settings-scoped-server";
+import { useSettingsWriter } from "./useSettingsWriter";
 import { useSettingsEnvironmentFilter, type SettingsTarget } from "./settings-environment-filter";
 import {
   changeDraftProject,
@@ -451,6 +460,9 @@ export function SettingsScheduledTasksRouteScreen() {
   });
   const { availableTargets, selectedTargets, selectedProjectKey, projectGroups } =
     useSettingsEnvironmentFilter();
+  const zoneTargets = availableTargets.filter(
+    (target) => target.serverConfig.environment.capabilities.scheduleTimeZone === true,
+  );
   const selectedGroup = projectGroups.find((group) => group.key === selectedProjectKey);
   const visibleEnvironments = settingsTargetsForProject(
     selectedTargets,
@@ -488,6 +500,7 @@ export function SettingsScheduledTasksRouteScreen() {
         contentContainerClassName="gap-5 px-5 pt-4"
         contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
       >
+        {zoneTargets.length > 0 ? <ScheduleTimeZoneSection targets={zoneTargets} /> : null}
         {visibleEnvironments.length > 0 ? (
           visibleEnvironments.map((environment) => (
             <EnvironmentTasks
@@ -522,6 +535,79 @@ export function SettingsScheduledTasksRouteScreen() {
         )}
       </ScrollView>
     </SettingsScreen>
+  );
+}
+
+const zoneName = (zone: string) => zone.replaceAll("_", " ");
+
+// The zone each environment reports its schedules in, keyed by newline-joined environment ids.
+const scheduleZonesAtom = Atom.family((key: string) =>
+  Atom.make((get) =>
+    (key === "" ? [] : (key.split("\n") as EnvironmentId[])).map(
+      (environmentId) =>
+        AsyncResult.getOrElse(
+          get(serverEnvironment.scheduledTasksLive({ environmentId, input: {} })),
+          () => null,
+        )?.timeZone,
+    ),
+  ),
+);
+
+/** Daily and weekly tasks on every connected environment follow this zone, whatever the filter. */
+function ScheduleTimeZoneSection({ targets }: { readonly targets: readonly SettingsTarget[] }) {
+  const gt = useGT();
+  const writable = useEnvironmentsWithScope(targets, AuthSettingsWriteScope);
+  const writeSettings = useSettingsWriter();
+  const editable = targets.filter((target) => writable.has(target.environmentId));
+  const canWrite = editable.length > 0;
+  // Only environments a save reaches decide the value and the hint, so a save can settle both.
+  const shown = resolveMobileSettingsTargets(canWrite ? editable : targets, null);
+  const saved = uniformMobileSetting(shown, "scheduledTaskTimeZone");
+  const device = deviceTimeZone();
+  const scheduleZones = useAtomValue(
+    scheduleZonesAtom(editable.map((target) => target.environmentId).join("\n")),
+  );
+  const machine = gt("Each machine's time zone");
+  const description = gt(
+    "Daily and weekly tasks run at their set time in this zone. Changing it moves upcoming runs on each connected environment you can change that supports it.",
+  );
+  const save = (zone: string) =>
+    void writeSettings(
+      shown,
+      editable.map((target) => ({
+        environmentId: target.environmentId,
+        patch: { scheduledTaskTimeZone: zone },
+      })),
+    );
+  return (
+    <SettingsSection
+      footer={
+        canWrite && schedulesDifferFromDevice(scheduleZones, device)
+          ? gt("{description} This device is in {zone}.", { description, zone: zoneName(device) })
+          : description
+      }
+    >
+      <SelectRow
+        label={gt("Time zone")}
+        value={saved === null ? gt("Mixed") : saved === "" ? machine : zoneName(saved)}
+        actions={
+          canWrite
+            ? [
+                {
+                  id: "device",
+                  title: gt("Use {zone}", { zone: zoneName(device) }),
+                  state:
+                    saved && canonicalTimeZone(saved) === canonicalTimeZone(device)
+                      ? "on"
+                      : undefined,
+                },
+                { id: "machine", title: machine, state: saved === "" ? "on" : undefined },
+              ]
+            : []
+        }
+        onSelect={(id) => save(id === "device" ? device : "")}
+      />
+    </SettingsSection>
   );
 }
 
@@ -1465,11 +1551,6 @@ function TaskForm({
             />
           </View>
         </SettingsSection>
-        {draft.schedule.mode === "fixed_time" ? (
-          <Text className="px-2 text-sm text-foreground-muted">
-            <T>Time uses the environment's time zone, which may differ from your phone's.</T>
-          </Text>
-        ) : null}
       </View>
       <Button
         tone="primary"
