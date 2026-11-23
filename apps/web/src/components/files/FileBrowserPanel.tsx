@@ -26,7 +26,7 @@ import { useTheme } from "~/hooks/useTheme";
 import { useWorkspaceMutationRefresh } from "~/hooks/useWorkspaceMutationRefresh";
 import { useFileContextMenu, type FileContextMenuAction } from "~/fileContextMenu";
 import { readLocalApi } from "~/localApi";
-import { T3_PIERRE_ICONS } from "~/pierre-icons";
+import { basenameOfPath, T3_PIERRE_ICONS } from "~/pierre-icons";
 import {
   PIERRE_TREE_UNSAFE_CSS,
   pierreTreeStyle,
@@ -35,6 +35,14 @@ import {
 
 import { joinHostPath } from "./filePath";
 import { createFileTreeDragMentionController } from "./fileTreeDragMention";
+import {
+  addFileTreeRowToChat,
+  addToChatMenuItem,
+  copyFileTreeRow,
+  fileTreeCopyMenuItems,
+  isFileTreeCopyAction,
+  useTreeContextMenuAnchor,
+} from "./fileTreeRowMenu";
 import {
   areAllDirectoriesExpanded,
   coalesceReentrantCalls,
@@ -202,8 +210,7 @@ export default function FileBrowserPanel({
   // path update scrolls to it again until the user takes over the scroll position.
   const followedRevealRef = useRef<string | null>(null);
 
-  // Shadow-DOM row rects are unreliable; capture the composed contextmenu event's viewport position.
-  const contextMenuPointerRef = useRef<{ x: number; y: number; at: number } | null>(null);
+  const contextMenuAnchor = useTreeContextMenuAnchor();
 
   const showEntryContextMenu = useStableCallback(
     (item: TreeContextMenuItem, context: TreeContextMenuOpenContext) => {
@@ -214,22 +221,16 @@ export default function FileBrowserPanel({
       }
       const relativePath = item.path.replace(/\/$/, "");
       const mention = serializeComposerFileLink(panelPath(relativePath));
-      const pointer = contextMenuPointerRef.current;
-      const pointerIsFresh = pointer !== null && performance.now() - pointer.at < 1000;
-      const anchorRect = context.anchorElement.getBoundingClientRect();
-      const position = pointerIsFresh
-        ? { x: pointer.x, y: pointer.y }
-        : { x: anchorRect.left, y: anchorRect.bottom };
       const fileTarget = { environmentId, filePath: relativePath, workspaceRoot: cwd };
       const fileMenuItems = fileContextMenu.buildItems(fileTarget);
-      // The app menu owns focus; the tree's outside-click handler would dismiss it before click.
-      context.close({ restoreFocus: !pointerIsFresh });
+      const position = contextMenuAnchor.takeOver(context);
       void settlePromise(async () => {
         const clicked = await api.contextMenu.show(
           [
             ...fileMenuItems,
+            ...fileTreeCopyMenuItems(),
             { id: "copy-mention", label: gt("Copy mention") },
-            { id: "add-to-chat", label: gt("Add to chat") },
+            addToChatMenuItem(),
           ],
           position,
         );
@@ -239,6 +240,11 @@ export default function FileBrowserPanel({
           fileMenuItems.some((entry) => entry.id === clicked) || clicked.startsWith("editor:");
         if (isFileMenuAction) {
           await fileContextMenu.activate(clicked as FileContextMenuAction, fileTarget);
+          return;
+        }
+        if (isFileTreeCopyAction(clicked)) {
+          const row = { name: basenameOfPath(relativePath), path: panelPath(relativePath) };
+          await copyFileTreeRow(clicked, row, cwd);
           return;
         }
         if (clicked === "copy-mention") {
@@ -253,25 +259,7 @@ export default function FileBrowserPanel({
           }
           return;
         }
-        if (clicked === "add-to-chat") {
-          const composer = composerRef?.current;
-          if (!composer) {
-            toastManager.add({
-              type: "error",
-              title: gt("Unable to add to chat"),
-              description: gt("Open a chat for this project and try again."),
-            });
-            return;
-          }
-          const inserted = composer.insertTextAtEnd(`${mention} `, { ensureLeadingBoundary: true });
-          if (!inserted) {
-            toastManager.add({
-              type: "error",
-              title: gt("Unable to add to chat"),
-              description: gt("The chat isn't ready to accept input right now."),
-            });
-          }
-        }
+        if (clicked === "add-to-chat") addFileTreeRowToChat(composerRef, panelPath(relativePath));
       }).then((result) => {
         if (!AsyncResult.isSuccess(result)) throw Cause.squash(result.cause);
       });
@@ -549,10 +537,7 @@ export default function FileBrowserPanel({
     <div
       className="flex min-h-0 flex-1 flex-col bg-background"
       data-file-browser-panel={`${environmentId}:${cwd}`}
-      // Capture runs before the tree's shadow-internal row handler opens the menu.
-      onContextMenuCapture={(event) => {
-        contextMenuPointerRef.current = { x: event.clientX, y: event.clientY, at: event.timeStamp };
-      }}
+      onContextMenuCapture={contextMenuAnchor.onContextMenuCapture}
       // Capture dragstart before the tree selects the row so selection sees the drag flag.
       onDragStartCapture={(event) => dragMention.handleDragStart(event.nativeEvent)}
       onDragEnd={() => dragMention.handleDragEnd((path) => model.getItem(path)?.deselect())}
