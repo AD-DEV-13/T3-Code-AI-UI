@@ -6927,7 +6927,13 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         threadId,
         ...key,
         startedAt: started.startedAt,
-        watch: { ...started, headSha: "abc1234def", passed: true, passedChecks: ["lint"] },
+        watch: {
+          ...started,
+          headSha: "abc1234def",
+          passed: true,
+          passedChecks: ["lint"],
+          approved: true,
+        },
       });
       yield* orchestrator.dispatch({
         type: "thread.pull-request.unlink",
@@ -6939,6 +6945,8 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       const again = yield* watchOf;
       assert.equal(again?.headSha, "abc1234def");
       assert.isTrue(again?.passed);
+      // Approval that changed while unwatched is news to the new watch.
+      assert.isTrue(again?.approved);
       yield* watching(false, "end");
     }),
   );
