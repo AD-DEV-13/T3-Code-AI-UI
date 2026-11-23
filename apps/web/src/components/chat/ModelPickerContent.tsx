@@ -9,6 +9,18 @@ import {
   MODEL_PICKER_JUMP_KEYBINDING_COMMANDS,
 } from "@t3tools/contracts";
 import { resolveSelectableModel } from "@t3tools/shared/model";
+import {
+  classifyModelVendor,
+  collectVendorQuotas,
+  isModelVendorTabId,
+  MODEL_VENDOR_IDS,
+  modelVendorDisplayName,
+  modelVendorTabId,
+  parseModelVendorTabId,
+  resolveCustomClaudeVendor,
+  type ModelVendorId,
+  type ModelVendorTabId,
+} from "@t3tools/shared/modelVendorQuota";
 import { useAtomValue } from "@effect/atom-react";
 import {
   formatProviderUpdateRequiredNotice,
@@ -29,7 +41,8 @@ import {
 } from "react";
 import { ChevronRightIcon } from "lucide-react";
 import { ModelListRow } from "./ModelListRow";
-import { ModelPickerSidebar } from "./ModelPickerSidebar";
+import { ModelPickerQuotaPanel } from "./ModelPickerQuotaPanel";
+import { ModelPickerSidebar, type ModelPickerSidebarSelection } from "./ModelPickerSidebar";
 import { useProviderWorkspaceSnapshotRefresh } from "./useProviderWorkspaceSnapshotRefresh";
 import { getProviderStatusMessage, hasProviderSetup } from "./ProviderStatusBanner";
 import {
@@ -50,7 +63,8 @@ import {
 import { ModelEsque } from "./providerIconUtils";
 import { isCommandPaletteOpen } from "../../commandPaletteBus";
 import { registerModelPickerContent } from "../../modelPickerVisibility";
-import { primaryServerKeybindingsAtom } from "../../state/server";
+import { primaryServerKeybindingsAtom, serverEnvironment } from "../../state/server";
+import { useNowMinute } from "../../hooks/useNowMinute";
 import {
   modelPickerJumpCommandForIndex,
   modelPickerJumpIndexFromCommand,
@@ -144,15 +158,22 @@ function shouldOfferModelPickerSetup(
   );
 }
 
+const VENDOR_COVERED_DRIVERS = new Set<string>(["claudeAgent", "codex", "antigravity"]);
+
 function adjacentModelPickerProvider(input: {
   entries: ReadonlyArray<ProviderInstanceEntry>;
-  selectedInstanceId: ProviderInstanceId | "favorites";
+  visibleVendorIds: ReadonlyArray<ModelVendorId>;
+  selectedInstanceId: ModelPickerSidebarSelection;
   direction: 1 | -1;
+  disabledVendorTabs: ReadonlySet<ModelVendorTabId> | undefined;
   disabledInstanceIds: ReadonlySet<ProviderInstanceId> | undefined;
   selectableUnavailableInstanceIds: ReadonlySet<ProviderInstanceId> | undefined;
 }) {
-  const providers: Array<ProviderInstanceId | "favorites"> = [
+  const providers: Array<ModelPickerSidebarSelection> = [
     "favorites",
+    ...input.visibleVendorIds
+      .map(modelVendorTabId)
+      .filter((tabId) => !input.disabledVendorTabs?.has(tabId)),
     ...input.entries
       .filter(
         (entry) =>
@@ -370,6 +391,8 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
   onFocusEffort?: () => void;
   /** Closes the list column, inside the popup's fixed height. */
   listFooter?: ReactNode;
+  /** Effort/reasoning controls rendered below the quota info in the right panel. */
+  effortSection?: ReactNode;
 }) {
   const gt = useGT();
   const messages = useMessages();
@@ -435,38 +458,57 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
       activeEntry,
       modelOptionsByInstance.get(props.activeInstanceId) ?? [],
     );
-  const [selectedInstanceId, setSelectedInstanceId] = useState<ProviderInstanceId | "favorites">(
-    () => {
-      if (
-        props.lockedProvider !== null ||
-        activeInstanceHasSelectableUnavailableModel ||
-        activeInstanceNeedsSetup
-      ) {
-        return props.activeInstanceId;
-      }
-      const hasPickableFavorite = favorites.some((favorite) => {
-        const entry = instanceEntries.find((entry) => entry.instanceId === favorite.provider);
-        return (
-          entry !== undefined &&
-          (modelOptionsByInstance.get(favorite.provider) ?? []).some(
-            (option) =>
-              option.slug === favorite.model &&
-              shouldIncludeModelPickerOption({
-                entry,
-                option,
-                activeInstanceId: props.activeInstanceId,
-                activeModel: activeModelSlug,
-              }),
-          )
-        );
-      });
-      return hasPickableFavorite ? "favorites" : props.activeInstanceId;
-    },
-  );
+  const [selectedInstanceId, setSelectedInstanceId] = useState<ModelPickerSidebarSelection>(() => {
+    const initialActiveVendor = activeEntry
+      ? classifyModelVendor({
+          slug: activeModelSlug || props.model,
+          name: activeModel?.name,
+          driverKind: activeEntry.driverKind,
+          subProvider: activeModel?.subProvider,
+        })
+      : null;
+    const activeFoldedIntoVendor =
+      activeEntry !== undefined &&
+      VENDOR_COVERED_DRIVERS.has(activeEntry.driverKind) &&
+      initialActiveVendor !== null &&
+      instanceEntries.filter((e) => e.driverKind === activeEntry.driverKind).length === 1;
+    const defaultActiveTab: ModelPickerSidebarSelection = activeFoldedIntoVendor
+      ? modelVendorTabId(initialActiveVendor)
+      : props.activeInstanceId;
+    if (
+      props.lockedProvider !== null ||
+      activeInstanceHasSelectableUnavailableModel ||
+      activeInstanceNeedsSetup
+    ) {
+      return defaultActiveTab;
+    }
+    const hasPickableFavorite = favorites.some((favorite) => {
+      const entry = instanceEntries.find((entry) => entry.instanceId === favorite.provider);
+      return (
+        entry !== undefined &&
+        (modelOptionsByInstance.get(favorite.provider) ?? []).some(
+          (option) =>
+            option.slug === favorite.model &&
+            shouldIncludeModelPickerOption({
+              entry,
+              option,
+              activeInstanceId: props.activeInstanceId,
+              activeModel: activeModelSlug,
+            }),
+        )
+      );
+    });
+    return hasPickableFavorite ? "favorites" : defaultActiveTab;
+  });
+  const selectedVendor = parseModelVendorTabId(selectedInstanceId);
+  const selectedProviderInstanceId: ProviderInstanceId | undefined =
+    selectedInstanceId === "favorites" || isModelVendorTabId(selectedInstanceId)
+      ? undefined
+      : selectedInstanceId;
   const { scanning: workspaceModelsScanning } = useProviderWorkspaceSnapshotRefresh({
     environmentId: props.environmentId,
     gitCwd: props.workspaceCwd ?? null,
-    instanceId: selectedInstanceId === "favorites" ? undefined : selectedInstanceId,
+    instanceId: selectedProviderInstanceId,
   });
   const favoritesSet = new Set(favorites.map((fav) => providerModelKey(fav.provider, fav.model)));
   const [expandedLegacyInstances, setExpandedLegacyInstances] = useState(
@@ -496,7 +538,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     searchInputRef.current?.focus({ preventScroll: true });
   };
 
-  const handleSelectInstance = (instanceId: ProviderInstanceId | "favorites") => {
+  const handleSelectInstance = (instanceId: ModelPickerSidebarSelection) => {
     setSelectedInstanceId(instanceId);
     // Focusing the search on touch raises the on-screen keyboard on every provider tap.
     if (window.matchMedia("(pointer: coarse)").matches) return;
@@ -632,6 +674,17 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     return out;
   })();
 
+  const nowMinute = useNowMinute();
+  const now = Date.parse(`${nowMinute}:00Z`);
+  const envServerConfig = useAtomValue(serverEnvironment.configValueAtom(props.environmentId));
+  const usageLimitSources = envServerConfig?.usageLimitSources ?? [];
+  const providerSnapshots = instanceEntries.map((entry) => entry.snapshot);
+  const vendorQuotas = collectVendorQuotas({
+    providers: providerSnapshots,
+    sources: usageLimitSources,
+    now,
+  });
+
   const subProvidersByInstance = new Map(
     instanceEntries.flatMap((entry) =>
       entry.snapshot.subProviders?.length
@@ -643,8 +696,8 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
   const isSearching = searchQuery.trim().length > 0;
   // Fit the tallest tab so switching tabs never resizes the popup and moves the rail under the cursor.
   const tallestTabUnits = (() => {
-    const unitsByTab = new Map<ProviderInstanceId | "favorites", number>();
-    const addRow = (tab: ProviderInstanceId | "favorites") => {
+    const unitsByTab = new Map<ModelPickerSidebarSelection, number>();
+    const addRow = (tab: ModelPickerSidebarSelection) => {
       const previous = unitsByTab.get(tab);
       unitsByTab.set(
         tab,
@@ -656,6 +709,13 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
       if (!matchesLockedProvider(model)) continue;
       const isFavorite = favoritesSet.has(providerModelKey(model.instanceId, model.slug));
       if (isFavorite) addRow("favorites");
+      const vendor = classifyModelVendor({
+        slug: model.slug,
+        name: model.name,
+        driverKind: model.driverKind,
+        subProvider: model.subProvider,
+      });
+      if (vendor) addRow(modelVendorTabId(vendor));
       if (model.isLegacy && !isFavorite) {
         tabsWithLegacyRow.add(model.instanceId);
       } else {
@@ -667,6 +727,44 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
       for (const _subProvider of subProviders) addRow(instanceId);
     }
     return Math.max(0, ...unitsByTab.values());
+  })();
+  const visibleVendorIds = (() => {
+    const present = new Set<ModelVendorId>();
+    for (const model of flatModels) {
+      const vendor = classifyModelVendor({
+        slug: model.slug,
+        name: model.name,
+        driverKind: model.driverKind,
+        subProvider: model.subProvider,
+      });
+      if (vendor) present.add(vendor);
+    }
+    for (const vendor of MODEL_VENDOR_IDS) {
+      if (vendorQuotas[vendor].windows.length > 0) present.add(vendor);
+    }
+    return MODEL_VENDOR_IDS.filter((vendor) => present.has(vendor));
+  })();
+  const lockedDisabledVendorTabs = (() => {
+    if (!isLocked) {
+      return undefined;
+    }
+    const availableVendors = new Set<ModelVendorTabId>();
+    for (const model of flatModels) {
+      if (!matchesLockedProvider(model)) continue;
+      const vendor = classifyModelVendor({
+        slug: model.slug,
+        name: model.name,
+        driverKind: model.driverKind,
+        subProvider: model.subProvider,
+      });
+      if (vendor) availableVendors.add(modelVendorTabId(vendor));
+    }
+    const disabled = new Set<ModelVendorTabId>();
+    for (const vendor of visibleVendorIds) {
+      const tabId = modelVendorTabId(vendor);
+      if (!availableVendors.has(tabId)) disabled.add(tabId);
+    }
+    return disabled;
   })();
   const lockedDisabledInstanceIds = (() => {
     if (!isLocked) {
@@ -682,12 +780,31 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
   })();
   const sidebarInstanceEntries = (() => {
     const enabledEntries = instanceEntries.filter(isProviderInstancePickerVisible);
+    // Group Claude-compatible custom vendors (GLM, DeepSeek) under their own vendor bucket so
+    // having Claude + Zcode (GLM) + DeepSeek does not make all three spill into the bottom rail.
+    const vendorBucketOf = (entry: ProviderInstanceEntry): string =>
+      entry.driverKind === "claudeAgent"
+        ? (resolveCustomClaudeVendor(entry.snapshot) ?? "claude")
+        : entry.driverKind;
+    const bucketCounts = new Map<string, number>();
+    for (const entry of enabledEntries) {
+      const bucket = vendorBucketOf(entry);
+      bucketCounts.set(bucket, (bucketCounts.get(bucket) ?? 0) + 1);
+    }
+    // Single instances of Claude, Codex, Antigravity, GLM, and DeepSeek are represented by the
+    // vendor tabs above so the rail never shows duplicate brand icons. Keep them only if they need
+    // setup or have multiple accounts of the same vendor.
+    const deduplicated = enabledEntries.filter((entry) => {
+      if (!VENDOR_COVERED_DRIVERS.has(entry.driverKind)) return true;
+      if ((bucketCounts.get(vendorBucketOf(entry)) ?? 0) > 1) return true;
+      return !isProviderInstancePickerReady(entry);
+    });
     if (!isLocked) {
-      return enabledEntries;
+      return deduplicated;
     }
     const available: ProviderInstanceEntry[] = [];
     const disabled: ProviderInstanceEntry[] = [];
-    for (const entry of enabledEntries) {
+    for (const entry of deduplicated) {
       if (matchesLockedProvider(entry)) {
         available.push(entry);
       } else {
@@ -696,7 +813,25 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     }
     return [...available, ...disabled];
   })();
-  const showSidebar = !isSearching && sidebarInstanceEntries.length > 0;
+  const showSidebar =
+    !isSearching && (visibleVendorIds.length > 0 || sidebarInstanceEntries.length > 0);
+  // Inside vendor tabs, prefer authenticated providers with active quota so an authenticated
+  // Antigravity Opus channel appears ahead of an unauthenticated/unused Claude entry.
+  const vendorInstanceOrder = [...instanceEntries]
+    .toSorted((a, b) => {
+      const score = (entry: ProviderInstanceEntry) => {
+        const authed = entry.snapshot.auth.status === "authenticated" ? 2 : 0;
+        const hasQuota =
+          entry.snapshot.usageLimits &&
+          !entry.snapshot.usageLimits.unavailable &&
+          entry.snapshot.usageLimits.windows.length > 0
+            ? 1
+            : 0;
+        return authed + hasQuota;
+      };
+      return score(b) - score(a);
+    })
+    .map((entry) => entry.instanceId);
   const instanceOrder = instanceEntries.map((entry) => entry.instanceId);
 
   const filteredModels = (() => {
@@ -719,11 +854,31 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
       result = result.filter((m) => matchesLockedProvider(m));
       if (selectedInstanceId === "favorites") {
         result = result.filter((m) => favoritesSet.has(providerModelKey(m.instanceId, m.slug)));
+      } else if (selectedVendor !== null) {
+        result = result.filter(
+          (m) =>
+            classifyModelVendor({
+              slug: m.slug,
+              name: m.name,
+              driverKind: m.driverKind,
+              subProvider: m.subProvider,
+            }) === selectedVendor,
+        );
       } else {
         result = result.filter((m) => m.instanceId === selectedInstanceId);
       }
     } else if (selectedInstanceId === "favorites") {
       result = result.filter((m) => favoritesSet.has(providerModelKey(m.instanceId, m.slug)));
+    } else if (selectedVendor !== null) {
+      result = result.filter(
+        (m) =>
+          classifyModelVendor({
+            slug: m.slug,
+            name: m.name,
+            driverKind: m.driverKind,
+            subProvider: m.subProvider,
+          }) === selectedVendor,
+      );
     } else {
       result = result.filter((m) => m.instanceId === selectedInstanceId);
     }
@@ -731,12 +886,17 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     return sortProviderModelItems(result, {
       favoriteModelKeys: favoritesSet,
       groupFavorites: selectedInstanceId !== "favorites",
-      instanceOrder: selectedInstanceId === "favorites" ? instanceOrder : [],
+      instanceOrder:
+        selectedVendor !== null
+          ? vendorInstanceOrder
+          : selectedInstanceId === "favorites"
+            ? instanceOrder
+            : [],
     });
   })();
 
   const legacySection = (() => {
-    if (isSearching || selectedInstanceId === "favorites") {
+    if (isSearching || selectedProviderInstanceId === undefined) {
       return null;
     }
     const currentModels: ModelPickerItem[] = [];
@@ -750,10 +910,10 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
       return null;
     }
     return {
-      key: modelPickerLegacySectionKey(selectedInstanceId),
+      key: modelPickerLegacySectionKey(selectedProviderInstanceId),
       currentModels,
       legacyModels,
-      isExpanded: expandedLegacyInstances.has(selectedInstanceId),
+      isExpanded: expandedLegacyInstances.has(selectedProviderInstanceId),
     };
   })();
 
@@ -761,10 +921,10 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
   // backend as a collapsible heading. Search and Favorites stay flat.
   const subProviderSections = (() => {
     const subProviders =
-      isSearching || selectedInstanceId === "favorites"
+      isSearching || selectedProviderInstanceId === undefined
         ? undefined
-        : subProvidersByInstance.get(selectedInstanceId);
-    if (!subProviders || selectedInstanceId === "favorites") return null;
+        : subProvidersByInstance.get(selectedProviderInstanceId);
+    if (!subProviders || selectedProviderInstanceId === undefined) return null;
     const { ungrouped, groups } = groupModelsBySubProvider(
       filteredModels,
       subProviders,
@@ -773,7 +933,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
     return {
       ungrouped,
       sections: groups.map(({ subProvider, models }) => {
-        const key = modelPickerSubProviderSectionKey(selectedInstanceId, subProvider.name);
+        const key = modelPickerSubProviderSectionKey(selectedProviderInstanceId, subProvider.name);
         return {
           key,
           name: subProvider.name,
@@ -807,7 +967,9 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
   })();
 
   const selectedEntry =
-    selectedInstanceId === "favorites" ? undefined : entryByInstanceId.get(selectedInstanceId);
+    selectedProviderInstanceId === undefined
+      ? undefined
+      : entryByInstanceId.get(selectedProviderInstanceId);
   const providerSetupEntries =
     !isSearching && canOpenProviderSetup
       ? instanceEntries.filter(
@@ -918,15 +1080,21 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
       event.stopPropagation();
       const next = adjacentModelPickerProvider({
         entries: sidebarInstanceEntries,
+        visibleVendorIds,
         selectedInstanceId,
         direction: command === "modelPicker.nextProvider" ? 1 : -1,
+        disabledVendorTabs: lockedDisabledVendorTabs,
         disabledInstanceIds: lockedDisabledInstanceIds,
         selectableUnavailableInstanceIds,
       });
       setSearchQuery("");
       handleSelectInstance(next);
       announce(
-        next === "favorites" ? gt("Favorites") : (entryByInstanceId.get(next)?.displayName ?? next),
+        next === "favorites"
+          ? gt("Favorites")
+          : isModelVendorTabId(next)
+            ? modelVendorDisplayName(parseModelVendorTabId(next)!)
+            : (entryByInstanceId.get(next)?.displayName ?? next),
         "model-picker",
       );
       return;
@@ -960,7 +1128,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
       <div
         ref={pickerContentRef}
         className={cn(
-          "relative flex w-screen max-w-90 flex-row overflow-hidden",
+          "relative flex w-172 max-w-full flex-row overflow-hidden",
           props.docked ? "max-sm:h-56 max-sm:w-full max-sm:max-w-none" : "max-h-86.5",
         )}
         // Docked, the popup sets the height; a minimum here would overflow short windows.
@@ -982,6 +1150,10 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
             onFocusSearch={focusSearchInput}
             instanceEntries={sidebarInstanceEntries}
             showFavorites
+            showVendorTabs
+            visibleVendorIds={visibleVendorIds}
+            vendorQuotas={vendorQuotas}
+            {...(lockedDisabledVendorTabs ? { disabledVendorTabs: lockedDisabledVendorTabs } : {})}
             {...(selectableUnavailableInstanceIds ? { selectableUnavailableInstanceIds } : {})}
             {...(lockedDisabledInstanceIds
               ? {
@@ -1044,7 +1216,7 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
         >
           <div
             className={cn(
-              "flex min-h-0 flex-1 flex-col overflow-hidden bg-muted/40",
+              "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-muted/40",
               showSidebar && "border-l border-border/70",
             )}
           >
@@ -1230,6 +1402,12 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
                     }
                     favoriteStarOnHover={selectedInstanceId === "favorites" && !isSearching}
                     showInstanceBadge={badgedInstanceIds.has(model.instanceId)}
+                    channelLabel={
+                      selectedVendor !== null &&
+                      new Set(visibleModels.map((item) => item.instanceId)).size > 1
+                        ? model.instanceDisplayName
+                        : undefined
+                    }
                     showNewBadge={model.badge === "new"}
                     unavailable={model.isUnavailable === true}
                     jumpLabel={modelJumpLabelByKey.get(modelKey) ?? null}
@@ -1255,6 +1433,16 @@ export const ModelPickerContent = memo(function ModelPickerContent(props: {
             {props.listFooter}
           </div>
         </Combobox>
+        <ModelPickerQuotaPanel
+          selectedTab={selectedInstanceId}
+          isSearching={isSearching}
+          providers={providerSnapshots}
+          sources={usageLimitSources}
+          environmentId={props.environmentId}
+          onRequestClose={onRequestClose}
+          effortSection={props.effortSection}
+          onFocusSearch={focusSearchInput}
+        />
       </div>
     </TooltipProvider>
   );

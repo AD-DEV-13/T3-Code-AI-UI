@@ -317,10 +317,13 @@ function modelWindows(models: typeof Models.Type) {
   return [...windows.values()];
 }
 
+const CLI_TOKEN_RENEW_COOLDOWN_MS = 5 * 60_000;
+
 export const makeAntigravityUsageProbe = Effect.fn("makeAntigravityUsageProbe")(function* (input: {
   readonly profileDirectory: string;
   readonly authMethod: AntigravitySettings["authMethod"];
   readonly readKeyringSecret?: Effect.Effect<string | undefined, AntigravityKeyringError>;
+  readonly renewCliToken?: Effect.Effect<void>;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -339,6 +342,7 @@ export const makeAntigravityUsageProbe = Effect.fn("makeAntigravityUsageProbe")(
     | { fingerprint: string; account: string; accessToken: string; expiresAt: number }
     | undefined;
   let generation = 0;
+  let lastRenewAttemptAt = 0;
 
   const request = (request: HttpClientRequest.HttpClientRequest) =>
     client.execute(request).pipe(
@@ -359,12 +363,15 @@ export const makeAntigravityUsageProbe = Effect.fn("makeAntigravityUsageProbe")(
     let projectId: string | undefined;
     if (!(yield* fs.exists(tokenPath))) {
       cached = undefined;
-      // Google account instances bypass the keyring, whose one entry every profile shares.
-      const stored = (yield* fs.exists(cliTokenPath))
-        ? yield* fs.readFileString(cliTokenPath)
-        : input.authMethod === "oauth-business"
-          ? yield* readKeyringSecret
-          : undefined;
+      const readStoredCliToken = Effect.gen(function* () {
+        // Google account instances bypass the keyring, whose one entry every profile shares.
+        return (yield* fs.exists(cliTokenPath))
+          ? yield* fs.readFileString(cliTokenPath)
+          : input.authMethod === "oauth-business"
+            ? yield* readKeyringSecret
+            : undefined;
+      });
+      let stored = yield* readStoredCliToken;
       if (stored === undefined) {
         return makeUnavailableUsageLimits({
           checkedAt,
@@ -372,8 +379,24 @@ export const makeAntigravityUsageProbe = Effect.fn("makeAntigravityUsageProbe")(
           message: "Sign in with Google to see Antigravity limits.",
         });
       }
-      const { token } = yield* decodeCliToken(stored);
-      if (!(Date.parse(token.expiry ?? "") > now + 60_000)) {
+      let { token } = yield* decodeCliToken(stored);
+      let effectiveNow = now;
+      if (!(Date.parse(token.expiry ?? "") > effectiveNow + 60_000)) {
+        if (
+          input.renewCliToken &&
+          token.refresh_token &&
+          effectiveNow - lastRenewAttemptAt >= CLI_TOKEN_RENEW_COOLDOWN_MS
+        ) {
+          lastRenewAttemptAt = effectiveNow;
+          yield* input.renewCliToken.pipe(Effect.timeout("45 seconds"), Effect.ignore);
+          stored = yield* readStoredCliToken;
+          if (stored !== undefined) {
+            ({ token } = yield* decodeCliToken(stored));
+          }
+          effectiveNow = yield* Clock.currentTimeMillis;
+        }
+      }
+      if (!(Date.parse(token.expiry ?? "") > effectiveNow + 60_000)) {
         return makeUnavailableUsageLimits({
           checkedAt,
           reason: "probeFailed",
@@ -468,11 +491,28 @@ export const makeAntigravityUsageProbe = Effect.fn("makeAntigravityUsageProbe")(
       return [...windows.values()];
     });
     const summary = yield* fetchWindows("retrieveUserQuotaSummary", antigravitySummaryWindows);
-    const windows = summary.length
-      ? summary
-      : yield* fetchWindows("fetchAvailableModels", (response) =>
-          decodeModels(response).pipe(Effect.map(modelWindows)),
-        );
+    // When a summary returns Gemini buckets without any Claude/3p bucket, also query
+    // `fetchAvailableModels` so Antigravity's Claude (Opus) / GPT quota is still surfaced.
+    const hasThirdPartySummary = summary.some(
+      (window) => window.id.startsWith("3p-") || window.id.startsWith("claude-"),
+    );
+    const modelFallback =
+      summary.length === 0 || !hasThirdPartySummary
+        ? yield* fetchWindows("fetchAvailableModels", (response) =>
+            decodeModels(response).pipe(Effect.map(modelWindows)),
+          )
+        : [];
+    const windows =
+      summary.length === 0
+        ? modelFallback
+        : [
+            ...summary,
+            ...modelFallback.filter(
+              (window) =>
+                (window.id.startsWith("claude-") || window.id.startsWith("gpt-")) &&
+                !summary.some((existing) => existing.id === window.id),
+            ),
+          ];
     if (windows.length === 0) {
       return makeUnavailableUsageLimits({
         checkedAt,
@@ -484,7 +524,7 @@ export const makeAntigravityUsageProbe = Effect.fn("makeAntigravityUsageProbe")(
   });
   const probe = read.pipe(
     Effect.provideService(Digest.Digest, crypto),
-    Effect.timeout("30 seconds"),
+    Effect.timeout(input.renewCliToken ? "60 seconds" : "30 seconds"),
     Effect.catch(() =>
       Effect.gen(function* () {
         return makeUnavailableUsageLimits({
@@ -500,6 +540,7 @@ export const makeAntigravityUsageProbe = Effect.fn("makeAntigravityUsageProbe")(
     clear: Effect.sync(() => {
       cached = undefined;
       generation++;
+      lastRenewAttemptAt = 0;
     }),
   };
 });

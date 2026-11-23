@@ -202,6 +202,7 @@ import {
   makeClaudeEnvironment,
   mergeClaudeProcessEnvironment,
   resolveClaudeHomePath,
+  resolveClaudeInstanceEnvOverrides,
 } from "../../provider/Drivers/ClaudeHome.ts";
 import {
   BUNDLED_CLAUDE_MODEL_CATALOG,
@@ -2485,6 +2486,7 @@ export function makeClaudeQueryOptions(input: {
   readonly allowDangerouslySkipPermissions?: boolean;
   readonly appendSystemPromptFileText?: string;
   // Flag settings, because a user's settings.json env beats the process env in Claude Code.
+  readonly instanceEnvOverrides?: Readonly<Record<string, string>>;
   readonly toolSearchOverride?: "true";
 }): ClaudeAgentSdkQueryOptions {
   const compiledSelection = compileClaudeModelSelection(input.modelSelection, input.modelCatalog);
@@ -2556,7 +2558,8 @@ export function makeClaudeQueryOptions(input: {
         };
   // A settings file path cannot take extra keys, so it goes through unchanged.
   const effectiveQuerySettings =
-    (input.toolSearchOverride === undefined &&
+    (input.instanceEnvOverrides === undefined &&
+      input.toolSearchOverride === undefined &&
       aliasOverrideEnv === undefined &&
       autoCompactWindow === undefined) ||
     typeof compactQuerySettings === "string"
@@ -2564,6 +2567,7 @@ export function makeClaudeQueryOptions(input: {
       : ({
           ...compactQuerySettings,
           env: {
+            ...input.instanceEnvOverrides,
             ...compactQuerySettings?.env,
             ...aliasOverrideEnv,
             // Claude Code ranks this env var above the autoCompactWindow setting.
@@ -5902,6 +5906,8 @@ export interface ClaudeAdapterV2Options {
   readonly settings: ClaudeSettings;
   readonly modelCatalog?: Effect.Effect<ClaudeModelCatalog>;
   readonly environment: NodeJS.ProcessEnv;
+  /** Explicit per-instance env overrides passed via flag settings so they beat ~/.claude/settings.json. */
+  readonly instanceEnvOverrides?: Readonly<Record<string, string>>;
   readonly attachmentsDir: string;
   readonly fileSystem: FileSystem.FileSystem;
   readonly path: Path.Path;
@@ -13629,6 +13635,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             onStop,
             supportedDialogKinds: ["resume_return"],
             ...(appendSystemPromptFileText === undefined ? {} : { appendSystemPromptFileText }),
+            ...(adapterOptions.instanceEnvOverrides === undefined
+              ? {}
+              : { instanceEnvOverrides: adapterOptions.instanceEnvOverrides }),
             ...(toolSearchOverride === undefined ? {} : { toolSearchOverride }),
           });
           const resolvedTurnCwd = yield* fileSystem
@@ -15455,6 +15464,7 @@ export const createClaudeAdapterV2 = Effect.fn("ClaudeAdapterV2Driver.create")(
       environment,
       hostEnvironment,
     );
+    const instanceEnvOverrides = yield* resolveClaudeInstanceEnvOverrides(environment);
     const claudeEnvironment = yield* makeClaudeEnvironment(config, baseEnvironment);
     const path = yield* Path.Path;
     const random = yield* SecureRandom.SecureRandom;
@@ -15466,6 +15476,7 @@ export const createClaudeAdapterV2 = Effect.fn("ClaudeAdapterV2Driver.create")(
       instanceId,
       settings: { ...config, enabled, binaryPath },
       environment: claudeEnvironment,
+      ...(instanceEnvOverrides === undefined ? {} : { instanceEnvOverrides }),
       attachmentsDir: serverConfig.attachmentsDir,
       fileSystem,
       path,
