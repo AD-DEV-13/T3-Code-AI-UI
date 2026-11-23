@@ -1,6 +1,27 @@
-import { ArrowDownIcon, ArrowUpIcon, PencilIcon, PlusIcon, StarIcon, XIcon } from "lucide-react";
+import {
+  DndContext,
+  type DraggableAttributes,
+  type DraggableSyntheticListeners,
+  type DragEndEvent,
+  type DragStartEvent,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+} from "@dnd-kit/core";
+import { restrictToParentElement, restrictToVerticalAxis } from "@dnd-kit/modifiers";
+import {
+  SortableContext,
+  arrayMove,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS as DndCSS } from "@dnd-kit/utilities";
+import { GripVerticalIcon, PencilIcon, PlusIcon, StarIcon, XIcon } from "lucide-react";
 import { msg, T, useGT, useMessages } from "gt-react";
-import { memo, useEffect, useRef, useState } from "react";
+import { createContext, memo, type ReactNode, use, useEffect, useRef, useState } from "react";
 import {
   ProviderDriverKind,
   type ProviderInstanceId,
@@ -29,6 +50,13 @@ const CUSTOM_MODEL_PLACEHOLDER_BY_KIND: Partial<Record<ProviderDriverKind, strin
 };
 
 const FILTER_THRESHOLD = 8;
+
+// Constant options keep dnd-kit's sensors, and so each row's listeners, stable for the row memo.
+const POINTER_SENSOR_OPTIONS = { activationConstraint: { distance: 4 } };
+const KEYBOARD_SENSOR_OPTIONS = { coordinateGetter: sortableKeyboardCoordinates };
+
+// Positions shift for many rows when one is starred, so only the grip reads them, not the row memo.
+const ModelPositionContext = createContext<ReadonlyMap<string, number>>(new Map());
 
 const PROVIDER_ALIAS_SLUGS = new Set(["default", "auto"]);
 
@@ -122,6 +150,8 @@ interface ProviderModelsSectionProps {
   readonly onToggleFavorite: (model: string) => void;
   readonly onModelOrderChange: (next: ReadonlyArray<string>) => void;
 }
+
+type ModelGroup = "favorite" | "visible" | "hidden";
 
 export function ProviderModelsSection({
   instanceId,
@@ -260,7 +290,7 @@ export function ProviderModelsSection({
       setEditingSlug(null);
     }
     void onChange(customModels.filter((entry) => entry.slug !== slug));
-    onModelOrderChange(modelOrder.filter((model) => model !== slug));
+    if (modelOrder.includes(slug)) onModelOrderChange(modelOrder.filter((model) => model !== slug));
     onFavoriteModelsChange(favoriteModels.filter((model) => model !== slug));
     setError(null);
   };
@@ -290,63 +320,62 @@ export function ProviderModelsSection({
     onToggleFavorite(slug);
   };
 
-  const groupOf = (model: (typeof displayModels)[number]) =>
+  const groupOf = (model: (typeof displayModels)[number]): ModelGroup =>
     favoriteModelSet.has(model.slug)
       ? "favorite"
       : !model.isCustom && placedHiddenSet.has(model.slug)
         ? "hidden"
         : "visible";
-  const handleMove = (slug: string, direction: -1 | 1) => {
-    if (!canWritePreferences) return;
-    const index = displayModels.findIndex((model) => model.slug === slug);
-    const nextIndex = index + direction;
-    if (index < 0 || nextIndex < 0 || nextIndex >= displayModels.length) return;
-    if (groupOf(displayModels[index]!) !== groupOf(displayModels[nextIndex]!)) return;
-    const next = displayModels.map((model) => model.slug);
-    [next[index], next[nextIndex]] = [next[nextIndex]!, next[index]!];
-    onModelOrderChange(next);
+  const sensors = useSensors(
+    useSensor(PointerSensor, POINTER_SENSOR_OPTIONS),
+    useSensor(KeyboardSensor, KEYBOARD_SENSOR_OPTIONS),
+  );
+  // Groups share one list so a row keeps its DOM (and focus) when it changes group.
+  // While dragging, other groups stop accepting drops; pointer and keyboard both honor that.
+  const [dragGroup, setDragGroup] = useState<ModelGroup | null>(null);
+  const handleDragStart = (event: DragStartEvent) => {
+    const model = displayModels.find((entry) => entry.slug === String(event.active.id));
+    setDragGroup(model === undefined ? null : groupOf(model));
+  };
+  const handleDragEnd = (event: DragEndEvent) => {
+    setDragGroup(null);
+    if (!canWritePreferences || event.over === null || event.active.id === event.over.id) return;
+    const order = displayModels.map((model) => model.slug);
+    const from = order.indexOf(String(event.active.id));
+    const to = order.indexOf(String(event.over.id));
+    if (from < 0 || to < 0) return;
+    // Another device can star or hide a row mid-drag, moving it out of the drag's group.
+    if (groupOf(displayModels[from]!) !== groupOf(displayModels[to]!)) return;
+    onModelOrderChange(arrayMove(order, from, to));
   };
 
   const handleToggleEdit = useStableCallback((slug: string) => {
-    if (!canManageCustomModels) return;
+    // A keyboard drag listens on the document, so an editor opened mid-drag would lose Space to it.
+    if (!canManageCustomModels || dragGroup !== null) return;
     editAttemptRef.current += 1;
     setEditingSlug((current) => (current === slug ? null : slug));
   });
   const rowHandlers = {
     onToggleFavorite: useStableCallback(handleToggleFavorite),
-    onMove: useStableCallback(handleMove),
     onSetHidden: useStableCallback(setHidden),
     onToggleEdit: handleToggleEdit,
     onRemove: useStableCallback(handleRemove),
   };
 
-  const renderRow = (model: (typeof displayModels)[number]) => {
-    const group = groupOf(model);
-    const index = displayModels.indexOf(model);
-    const previousModel = displayModels[index - 1];
-    const nextModel = displayModels[index + 1];
-    return (
-      <ProviderModelRow
-        key={`${instanceId}:${model.slug}`}
-        model={model}
-        isHidden={!model.isCustom && hiddenModelSet.has(model.slug)}
-        isFavorite={group === "favorite"}
-        canMoveUp={!isFiltering && previousModel !== undefined && groupOf(previousModel) === group}
-        canMoveDown={!isFiltering && nextModel !== undefined && groupOf(nextModel) === group}
-        isFiltering={isFiltering}
-        flagMissingReasoning={flagMissingReasoning}
-        canWritePreferences={canWritePreferences}
-        canManageCustomModels={canManageCustomModels}
-        {...rowHandlers}
-      />
-    );
-  };
-
-  const groupLabel = (label: string, isFirst: boolean) => (
-    <div className={cn("px-2 pb-1.5 text-2xs text-muted-foreground", isFirst ? "pt-1" : "pt-5")}>
-      {label}
-    </div>
+  // A slug with no custom row (reset, removed, now built in) opens no editor and blocks nothing.
+  const editingEntry =
+    canManageCustomModels && models.some((model) => model.isCustom && model.slug === editingSlug)
+      ? customModels.find((entry) => entry.slug === editingSlug)
+      : undefined;
+  const positionInGroup: Record<ModelGroup, number> = { favorite: 0, visible: 0, hidden: 0 };
+  const positions = new Map(
+    visibleModels.map((model) => [model.slug, ++positionInGroup[groupOf(model)]]),
   );
+  const groupLabels: Record<ModelGroup, string | null> = {
+    favorite: favoriteCount > 0 ? gt("Favorites") : null,
+    visible: favoriteCount > 0 ? gt("All", { $context: "group of all visible models" }) : null,
+    hidden: gt("Hidden from picker"),
+  };
 
   return (
     <div className="lg:flex lg:h-full lg:min-h-0 lg:flex-col">
@@ -416,46 +445,91 @@ export function ProviderModelsSection({
             {isFiltering ? gt("No models match.") : gt("No models reported for this provider yet.")}
           </p>
         ) : null}
-        {visibleModels.map((model, index) => {
-          const group = groupOf(model);
-          const previous = visibleModels[index - 1];
-          const startsGroup = previous === undefined || groupOf(previous) !== group;
-          const editingEntry =
-            canManageCustomModels && model.isCustom && editingSlug === model.slug
-              ? customModels.find((entry) => entry.slug === model.slug)
-              : undefined;
-          return (
-            <div key={`${instanceId}:${model.slug}:group`}>
-              {startsGroup && favoriteCount > 0 && group === "favorite"
-                ? groupLabel(gt("Favorites"), index === 0)
-                : null}
-              {startsGroup && favoriteCount > 0 && group === "visible"
-                ? groupLabel(gt("All", { $context: "group of all visible models" }), index === 0)
-                : null}
-              {startsGroup && group === "hidden"
-                ? groupLabel(gt("Hidden from picker"), index === 0)
-                : null}
-              {renderRow(model)}
-              {editingEntry ? (
-                <CustomModelEditor
-                  key={`${instanceId}:${model.slug}:editor`}
-                  instanceId={instanceId}
-                  driverKind={driverKind}
-                  entry={editingEntry}
-                  builtInModels={builtInModels}
-                  onSave={(next) => void handleSaveEdit(next)}
-                  onDraftChange={() => {
-                    editAttemptRef.current += 1;
-                  }}
-                  onCancel={() => {
-                    editAttemptRef.current += 1;
-                    setEditingSlug(null);
-                  }}
-                />
-              ) : null}
-            </div>
-          );
-        })}
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          modifiers={[restrictToVerticalAxis, restrictToParentElement]}
+          onDragStart={handleDragStart}
+          onDragEnd={handleDragEnd}
+          onDragCancel={() => setDragGroup(null)}
+        >
+          <SortableContext
+            items={visibleModels.map((model) => model.slug)}
+            strategy={verticalListSortingStrategy}
+          >
+            <ModelPositionContext value={positions}>
+              <div>
+                {visibleModels.flatMap((model, index) => {
+                  const group = groupOf(model);
+                  const previous = visibleModels[index - 1];
+                  const startsGroup = previous === undefined || groupOf(previous) !== group;
+                  const label = startsGroup ? groupLabels[group] : null;
+                  const isHidden = !model.isCustom && hiddenModelSet.has(model.slug);
+                  const rowEditingEntry =
+                    model.isCustom && model.slug === editingEntry?.slug ? editingEntry : undefined;
+                  const showHandle = !isHidden && !isFiltering;
+                  // An open editor stretches its row's drop target, so reordering waits for it to
+                  // close. The grip stays so the row's buttons do not shift under the cursor.
+                  const canDrag = canWritePreferences && showHandle && editingEntry === undefined;
+                  const item = (
+                    <SortableModelItem
+                      key={`${instanceId}:model:${model.slug}`}
+                      slug={model.slug}
+                      canDrag={canDrag}
+                      acceptsDrop={dragGroup === null || dragGroup === group}
+                      renderRow={(handleRef, handleAttributes, handleListeners) => (
+                        <ProviderModelRow
+                          model={model}
+                          isHidden={isHidden}
+                          isFavorite={group === "favorite"}
+                          showHandle={showHandle}
+                          canDrag={canDrag}
+                          handleRef={handleRef}
+                          handleAttributes={handleAttributes}
+                          handleListeners={handleListeners}
+                          flagMissingReasoning={flagMissingReasoning}
+                          canWritePreferences={canWritePreferences}
+                          canManageCustomModels={canManageCustomModels}
+                          {...rowHandlers}
+                        />
+                      )}
+                    >
+                      {rowEditingEntry ? (
+                        <CustomModelEditor
+                          instanceId={instanceId}
+                          driverKind={driverKind}
+                          entry={rowEditingEntry}
+                          builtInModels={builtInModels}
+                          onSave={(next) => void handleSaveEdit(next)}
+                          onDraftChange={() => {
+                            editAttemptRef.current += 1;
+                          }}
+                          onCancel={() => {
+                            editAttemptRef.current += 1;
+                            setEditingSlug(null);
+                          }}
+                        />
+                      ) : null}
+                    </SortableModelItem>
+                  );
+                  if (label === null) return [item];
+                  return [
+                    <div
+                      key={`${instanceId}:label:${group}`}
+                      className={cn(
+                        "px-2 pb-1.5 text-2xs text-muted-foreground",
+                        index === 0 ? "pt-1" : "pt-5",
+                      )}
+                    >
+                      {label}
+                    </div>,
+                    item,
+                  ];
+                })}
+              </div>
+            </ModelPositionContext>
+          </SortableContext>
+        </DndContext>
       </div>
 
       {driverKind === "antigravity" || !canManageCustomModels ? null : isAdding ? (
@@ -501,18 +575,58 @@ export function ProviderModelsSection({
   );
 }
 
+function SortableModelItem({
+  slug,
+  canDrag,
+  acceptsDrop,
+  renderRow,
+  children,
+}: {
+  readonly slug: string;
+  readonly canDrag: boolean;
+  readonly acceptsDrop: boolean;
+  readonly renderRow: (
+    handleRef: (element: HTMLElement | null) => void,
+    handleAttributes: DraggableAttributes,
+    handleListeners: DraggableSyntheticListeners,
+  ) => ReactNode;
+  readonly children: ReactNode;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    setActivatorNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: slug, disabled: { draggable: !canDrag, droppable: !acceptsDrop } });
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={{ transform: DndCSS.Translate.toString(transform), transition }}
+      className={cn(isDragging && "relative z-10 rounded-md bg-background shadow-md")}
+    >
+      {renderRow(setActivatorNodeRef, attributes, listeners)}
+      {children}
+    </div>
+  );
+}
+
 const ProviderModelRow = memo(function ProviderModelRow({
   model,
   isHidden,
   isFavorite,
-  canMoveUp,
-  canMoveDown,
-  isFiltering,
+  showHandle,
+  canDrag,
+  handleRef,
+  handleAttributes,
+  handleListeners,
   flagMissingReasoning,
   canWritePreferences,
   canManageCustomModels,
   onToggleFavorite,
-  onMove,
   onSetHidden,
   onToggleEdit,
   onRemove,
@@ -520,14 +634,15 @@ const ProviderModelRow = memo(function ProviderModelRow({
   readonly model: ServerProviderModel;
   readonly isHidden: boolean;
   readonly isFavorite: boolean;
-  readonly canMoveUp: boolean;
-  readonly canMoveDown: boolean;
-  readonly isFiltering: boolean;
+  readonly showHandle: boolean;
+  readonly canDrag: boolean;
+  readonly handleRef: (element: HTMLElement | null) => void;
+  readonly handleAttributes: DraggableAttributes;
+  readonly handleListeners: DraggableSyntheticListeners;
   readonly flagMissingReasoning: boolean;
   readonly canWritePreferences: boolean;
   readonly canManageCustomModels: boolean;
   readonly onToggleFavorite: (slug: string) => void;
-  readonly onMove: (slug: string, direction: -1 | 1) => void;
   readonly onSetHidden: (slug: string, hidden: boolean) => void;
   readonly onToggleEdit: (slug: string) => void;
   readonly onRemove: (slug: string) => void;
@@ -605,46 +720,6 @@ const ProviderModelRow = memo(function ProviderModelRow({
         ) : null}
       </span>
       <span className="flex shrink-0 items-center justify-end gap-0.5">
-        {!isHidden && !isFiltering ? (
-          <>
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    size="icon-micro"
-                    variant="ghost-muted"
-                    disabled={!canWritePreferences || !canMoveUp}
-                    onClick={() => onMove(model.slug, -1)}
-                    aria-label={gt("Move {name} up", { name: model.name })}
-                  />
-                }
-              >
-                <ArrowUpIcon className="size-3" />
-              </TooltipTrigger>
-              <TooltipPopup side="top">
-                <T>Move up</T>
-              </TooltipPopup>
-            </Tooltip>
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <Button
-                    size="icon-micro"
-                    variant="ghost-muted"
-                    disabled={!canWritePreferences || !canMoveDown}
-                    onClick={() => onMove(model.slug, 1)}
-                    aria-label={gt("Move {name} down", { name: model.name })}
-                  />
-                }
-              >
-                <ArrowDownIcon className="size-3" />
-              </TooltipTrigger>
-              <TooltipPopup side="top">
-                <T>Move down</T>
-              </TooltipPopup>
-            </Tooltip>
-          </>
-        ) : null}
         {model.isCustom ? (
           <>
             <Tooltip>
@@ -685,6 +760,16 @@ const ProviderModelRow = memo(function ProviderModelRow({
             </Tooltip>
           </>
         ) : null}
+        {showHandle ? (
+          <ModelDragHandle
+            slug={model.slug}
+            name={model.name}
+            disabled={!canDrag}
+            handleRef={handleRef}
+            handleAttributes={handleAttributes}
+            handleListeners={handleListeners}
+          />
+        ) : null}
       </span>
       {/* Disabled switches receive no pointer events; wrap the tooltip trigger. */}
       <Tooltip>
@@ -702,3 +787,35 @@ const ProviderModelRow = memo(function ProviderModelRow({
     </div>
   );
 });
+
+function ModelDragHandle({
+  slug,
+  name,
+  disabled,
+  handleRef,
+  handleAttributes,
+  handleListeners,
+}: {
+  readonly slug: string;
+  readonly name: string;
+  readonly disabled: boolean;
+  readonly handleRef: (element: HTMLElement | null) => void;
+  readonly handleAttributes: DraggableAttributes;
+  readonly handleListeners: DraggableSyntheticListeners;
+}) {
+  const gt = useGT();
+  const position = use(ModelPositionContext).get(slug) ?? 0;
+  return (
+    <button
+      type="button"
+      ref={handleRef}
+      {...handleAttributes}
+      {...handleListeners}
+      disabled={disabled}
+      aria-label={gt("Reorder {route}, position {position}", { route: name, position })}
+      className="flex size-5 shrink-0 cursor-grab touch-none items-center justify-center rounded text-muted-foreground/70 outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring active:cursor-grabbing disabled:pointer-events-none disabled:opacity-50"
+    >
+      <GripVerticalIcon className="size-3" />
+    </button>
+  );
+}
