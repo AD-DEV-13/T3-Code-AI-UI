@@ -14,6 +14,7 @@ import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
+import * as SubscriptionRef from "effect/SubscriptionRef";
 import { vi } from "vite-plus/test";
 
 vi.mock("electron", () => ({}));
@@ -37,6 +38,7 @@ import * as DesktopPreReadyPlatform from "./DesktopPreReadyPlatform.ts";
 import * as DesktopShutdown from "./DesktopShutdown.ts";
 import * as DesktopState from "./DesktopState.ts";
 import * as DesktopBackendPool from "../backend/DesktopBackendPool.ts";
+import * as DesktopBackgroundService from "../backend/DesktopBackgroundService.ts";
 import * as DesktopServerExposure from "../backend/DesktopServerExposure.ts";
 import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as ElectronDialog from "../electron/ElectronDialog.ts";
@@ -49,6 +51,7 @@ import * as DesktopSnapShot from "../snapShot/DesktopSnapShot.ts";
 import * as DesktopRendererHistory from "../telemetry/DesktopRendererHistory.ts";
 import * as DesktopUpdates from "../updates/DesktopUpdates.ts";
 import * as DesktopApplicationMenu from "../window/DesktopApplicationMenu.ts";
+import * as DesktopTray from "../window/DesktopTray.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 import * as DesktopWslBackend from "../wsl/DesktopWslBackend.ts";
 
@@ -87,11 +90,19 @@ interface StubbedDesktop {
   readonly flushRendererHistory?: Effect.Effect<void>;
   readonly tokenRequested?: Deferred.Deferred<void>;
   readonly activationStarted?: Deferred.Deferred<void>;
+  readonly attachedBackgroundService?: DesktopBackgroundService.AttachedBackgroundService;
+  readonly backgroundServiceEnabled?: boolean;
 }
 
 const runStubbedDesktop = (stub: StubbedDesktop) =>
   Effect.gen(function* () {
     const quitting = yield* Ref.make(false);
+    const primaryBackendStartup = yield* SubscriptionRef.make<DesktopState.PrimaryBackendStartup>({
+      _tag: "Starting",
+    });
+    const attachedRef = yield* Ref.make(
+      Option.none<DesktopBackgroundService.AttachedBackgroundService>(),
+    );
     const runApp = DesktopApp.program
       .pipe(
         Effect.provide(NodeCrypto.layer),
@@ -110,6 +121,7 @@ const runStubbedDesktop = (stub: StubbedDesktop) =>
           platform: "linux",
           isDevelopment: false,
           isPackaged: true,
+          baseDir: "/isolated",
           stateDir: "/isolated/userdata",
           configuredBackendPort: Option.some(3773),
           defaultDesktopSettings: { serverExposureMode: "local-only" },
@@ -129,6 +141,7 @@ const runStubbedDesktop = (stub: StubbedDesktop) =>
         Effect.provideService(DesktopAppSettings.DesktopAppSettings, {
           load: Effect.void,
           get: Effect.succeed({
+            backgroundServiceEnabled: stub.backgroundServiceEnabled ?? false,
             localEnvironmentEnabled: stub.localEnvironmentEnabled,
             serverExposureMode: "local-only",
           }),
@@ -149,6 +162,10 @@ const runStubbedDesktop = (stub: StubbedDesktop) =>
         Effect.provideService(DesktopApplicationMenu.DesktopApplicationMenu, {
           configure: stub.record("menu"),
         }),
+        Effect.provideService(DesktopTray.DesktopTray, {
+          sync: stub.record("tray-sync"),
+          destroy: stub.record("tray-destroy"),
+        }),
         Effect.provideService(DesktopUpdates.DesktopUpdates, {
           configure: Effect.void,
         } as unknown as DesktopUpdates.DesktopUpdates["Service"]),
@@ -168,6 +185,7 @@ const runStubbedDesktop = (stub: StubbedDesktop) =>
         } as DesktopSnapShot.DesktopSnapShot["Service"]),
         Effect.provideService(DesktopState.DesktopState, {
           quitting,
+          primaryBackendStartup,
         } as DesktopState.DesktopState["Service"]),
         Effect.provideService(DesktopWindow.DesktopWindow, {
           ensureMain: stub
@@ -176,7 +194,21 @@ const runStubbedDesktop = (stub: StubbedDesktop) =>
           createMainIfBackendReady: stub
             .record("window")
             .pipe(Effect.andThen(Deferred.succeed(stub.windowStarted, undefined))),
+          handleBackendReady: () => stub.record("backend-ready"),
         } as unknown as DesktopWindow.DesktopWindow["Service"]),
+        Effect.provideService(DesktopBackgroundService.DesktopBackgroundService, {
+          attached: Ref.get(attachedRef),
+          tryAttach:
+            stub.attachedBackgroundService === undefined
+              ? Effect.succeedNone
+              : Ref.set(attachedRef, Option.some(stub.attachedBackgroundService)).pipe(
+                  Effect.andThen(stub.record("attach-service")),
+                  Effect.as(Option.some(stub.attachedBackgroundService)),
+                ),
+          clearAttached: Ref.set(attachedRef, Option.none()),
+          issueBearerToken: Effect.succeed("service-token"),
+          status: Effect.die("unexpected status"),
+        }),
         Effect.provideService(DesktopBackendPool.DesktopBackendPool, {
           primary: Effect.succeed({
             start: stub.record("backend"),
@@ -186,7 +218,13 @@ const runStubbedDesktop = (stub: StubbedDesktop) =>
         } as unknown as DesktopBackendPool.DesktopBackendPool["Service"]),
         Effect.provideService(DesktopServerExposure.DesktopServerExposure, {
           configureFromSettings: () => Effect.succeed({ mode: "local-only" }),
-          backendConfig: Effect.succeed({ httpBaseUrl: new URL("http://127.0.0.1:3773") }),
+          backendConfig: Effect.succeed({
+            port: 3773,
+            bindHost: "127.0.0.1",
+            httpBaseUrl: new URL("http://127.0.0.1:3773"),
+            tailscaleServeEnabled: false,
+            tailscaleServePort: 443,
+          }),
         } as unknown as DesktopServerExposure.DesktopServerExposure["Service"]),
         Effect.provideService(DesktopWslBackend.DesktopWslBackend, {
           reconcile: Effect.void,
@@ -309,7 +347,7 @@ it.effect.each([false, true])(
       // The backend spawns before menus, and its token is minted without waiting for the renderer.
       assert.deepEqual(
         events.filter((event) => event !== "token"),
-        ["identity", "ready", "identity", "backend", "menu", "window"],
+        ["identity", "ready", "identity", "backend", "menu", "tray-sync", "window"],
       );
       assert.isAbove(events.indexOf("token"), events.indexOf("backend"));
       assert.isFalse(yield* Deferred.isDone(registrationStopped));
@@ -386,4 +424,43 @@ it.effect(
         "startup left the t3 <dir> control socket closed",
       );
     }).pipe(Effect.provide(Layer.mergeAll(DesktopShutdown.layer, NodeServices.layer))),
+);
+
+it.effect(
+  "attaches to a running local background service without starting or stopping an embedded backend",
+  () =>
+    Effect.gen(function* () {
+      const windowStarted = yield* Deferred.make<void>();
+      const tokenRequested = yield* Deferred.make<void>();
+      const events: string[] = [];
+      const app = yield* runStubbedDesktop({
+        localEnvironmentEnabled: true,
+        environment: { isPackaged: false },
+        fileSystem: FileSystem.layerNoop({}),
+        record: (event) =>
+          Effect.sync(() => {
+            events.push(event);
+          }),
+        windowStarted,
+        tokenRequested,
+        registerLinuxUrlHandler: Effect.void,
+        attachedBackgroundService: {
+          pid: process.pid,
+          port: 3773,
+          httpBaseUrl: new URL("http://127.0.0.1:3773"),
+          serverVersion: "0.1.11",
+          label: "Windows",
+        },
+        backgroundServiceEnabled: true,
+      });
+      yield* Deferred.await(windowStarted);
+      yield* Deferred.await(tokenRequested);
+      assert.include(events, "attach-service");
+      assert.include(events, "backend-ready");
+      assert.include(events, "tray-sync");
+      assert.notInclude(events, "backend");
+      yield* (yield* DesktopShutdown.DesktopShutdown).request;
+      yield* Fiber.join(app);
+      assert.include(events, "tray-destroy");
+    }).pipe(Effect.provide(DesktopShutdown.layer)),
 );

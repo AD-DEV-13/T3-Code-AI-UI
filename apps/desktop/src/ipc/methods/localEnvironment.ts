@@ -1,10 +1,14 @@
+import { DesktopBackgroundServiceStateSchema } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import * as DesktopEnvironment from "../../app/DesktopEnvironment.ts";
 import * as DesktopLifecycle from "../../app/DesktopLifecycle.ts";
+import * as DesktopBackgroundService from "../../backend/DesktopBackgroundService.ts";
 import * as DesktopAppSettings from "../../settings/DesktopAppSettings.ts";
+import * as DesktopTray from "../../window/DesktopTray.ts";
 import * as IpcChannels from "../channels.ts";
 import { makeIpcMethod, makeSyncIpcMethod } from "../DesktopIpc.ts";
 
@@ -43,5 +47,50 @@ export const getHostEnvironmentId = makeIpcMethod({
       .readFileString(environment.path.join(environment.stateDir, "environment-id"))
       .pipe(Effect.orElseSucceed(() => ""));
     return contents.trim() || null;
+  }),
+});
+
+export const getBackgroundServiceState = makeIpcMethod({
+  channel: IpcChannels.GET_BACKGROUND_SERVICE_STATE_CHANNEL,
+  payload: Schema.Void,
+  result: DesktopBackgroundServiceStateSchema,
+  handler: Effect.fn("desktop.ipc.localEnvironment.getBackgroundServiceState")(function* () {
+    const backgroundService = yield* DesktopBackgroundService.DesktopBackgroundService;
+    return yield* backgroundService.status;
+  }),
+});
+
+const syncTrayIfPresent = Effect.serviceOption(DesktopTray.DesktopTray).pipe(
+  Effect.flatMap(
+    Option.match({
+      onNone: () => Effect.void,
+      onSome: (tray) => tray.sync,
+    }),
+  ),
+);
+
+export const enableBackgroundService = makeIpcMethod({
+  channel: IpcChannels.ENABLE_BACKGROUND_SERVICE_CHANNEL,
+  payload: Schema.Void,
+  result: DesktopBackgroundServiceStateSchema,
+  handler: Effect.fn("desktop.ipc.localEnvironment.enableBackgroundService")(function* () {
+    const appSettings = yield* DesktopAppSettings.DesktopAppSettings;
+    const backgroundService = yield* DesktopBackgroundService.DesktopBackgroundService;
+    yield* appSettings.setBackgroundServiceEnabled(true);
+    yield* syncTrayIfPresent;
+    return yield* backgroundService.status;
+  }),
+});
+
+export const disableBackgroundService = makeIpcMethod({
+  channel: IpcChannels.DISABLE_BACKGROUND_SERVICE_CHANNEL,
+  payload: Schema.Void,
+  result: DesktopBackgroundServiceStateSchema,
+  handler: Effect.fn("desktop.ipc.localEnvironment.disableBackgroundService")(function* () {
+    const appSettings = yield* DesktopAppSettings.DesktopAppSettings;
+    const backgroundService = yield* DesktopBackgroundService.DesktopBackgroundService;
+    yield* appSettings.setBackgroundServiceEnabled(false);
+    yield* syncTrayIfPresent;
+    return yield* backgroundService.status;
   }),
 });

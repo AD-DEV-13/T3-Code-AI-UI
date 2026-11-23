@@ -9,11 +9,16 @@ import * as DesktopEnvironment from "../../app/DesktopEnvironment.ts";
 import * as DesktopLifecycle from "../../app/DesktopLifecycle.ts";
 import * as DesktopShutdown from "../../app/DesktopShutdown.ts";
 import * as DesktopState from "../../app/DesktopState.ts";
+import * as DesktopBackgroundService from "../../backend/DesktopBackgroundService.ts";
 import * as ElectronApp from "../../electron/ElectronApp.ts";
 import * as ElectronTheme from "../../electron/ElectronTheme.ts";
 import * as DesktopAppSettings from "../../settings/DesktopAppSettings.ts";
+import * as DesktopTray from "../../window/DesktopTray.ts";
 import * as DesktopWindow from "../../window/DesktopWindow.ts";
 import {
+  disableBackgroundService,
+  enableBackgroundService,
+  getBackgroundServiceState,
   getHostEnvironmentId,
   getLocalEnvironmentEnabled,
   setLocalEnvironmentEnabled,
@@ -85,4 +90,79 @@ describe("local environment IPC", () => {
       ]);
     }).pipe(Effect.provide(layer));
   });
+
+  it.effect("toggles background service setting immediately and syncs the system tray", () =>
+    Effect.gen(function* () {
+      let traySyncCount = 0;
+      const settingsLayer = DesktopAppSettings.layerTest(
+        DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS,
+      );
+      const trayLayer = Layer.succeed(DesktopTray.DesktopTray, {
+        sync: Effect.sync(() => {
+          traySyncCount += 1;
+        }),
+        destroy: Effect.void,
+      });
+      const backgroundServiceLayer = Layer.effect(
+        DesktopBackgroundService.DesktopBackgroundService,
+        Effect.gen(function* () {
+          const settings = yield* DesktopAppSettings.DesktopAppSettings;
+          return DesktopBackgroundService.DesktopBackgroundService.of({
+            attached: Effect.succeedNone,
+            tryAttach: Effect.succeedNone,
+            clearAttached: Effect.void,
+            issueBearerToken: Effect.die("unexpected token"),
+            status: settings.get.pipe(
+              Effect.map((current) => ({
+                supported: true,
+                enabled: current.backgroundServiceEnabled,
+                running: false,
+                attached: false,
+                externalService: false,
+                version: null,
+              })),
+            ),
+          });
+        }),
+      ).pipe(Layer.provideMerge(settingsLayer), Layer.provideMerge(trayLayer));
+
+      const initial = yield* getBackgroundServiceState
+        .handler(undefined)
+        .pipe(Effect.provide(backgroundServiceLayer));
+      assert.deepEqual(initial, {
+        supported: true,
+        enabled: false,
+        running: false,
+        attached: false,
+        externalService: false,
+        version: null,
+      });
+
+      const enabled = yield* enableBackgroundService
+        .handler(undefined)
+        .pipe(Effect.provide(backgroundServiceLayer));
+      assert.deepEqual(enabled, {
+        supported: true,
+        enabled: true,
+        running: false,
+        attached: false,
+        externalService: false,
+        version: null,
+      });
+      assert.strictEqual(traySyncCount, 1);
+
+      const disabled = yield* disableBackgroundService
+        .handler(undefined)
+        .pipe(Effect.provide(backgroundServiceLayer));
+      assert.deepEqual(disabled, {
+        supported: true,
+        enabled: false,
+        running: false,
+        attached: false,
+        externalService: false,
+        version: null,
+      });
+      assert.strictEqual(traySyncCount, 2);
+    }),
+  );
 });

@@ -12727,5 +12727,18 @@
   "99d51127f573296b": "別のアカウント",
   "8ec2c57414669b79": "2つ目の {tracker} ワークスペースまたはユーザーを接続します。",
   "99963c0142e17f00": "新しい {tracker} アカウント用です。",
-  "6d8e4ebc889bace9": "アカウントを追加"
+  "6d8e4ebc889bace9": "アカウントを追加",
+  "8bb8000f5c425264": "Background service management is unavailable.",
+  "cca5723bf44ecf68": "Failed to load the background service state.",
+  "286ca018f965864c": "Managed by the local t3 background service. Closing the window keeps agents and remote access running.",
+  "296e682a9fefc518": "Closing the window minimizes T3 Code to the system tray so agents and remote access stay active.",
+  "6692f8c5e3c492a0": "Keep T3 Code running in the system tray when you close the window so agents and remote access stay active.",
+  "230f542172ae87f5": "Couldn't update the background service setting.",
+  "3ecb5799b78f118a": "Could not update background service",
+  "80e9842fba54a764": "Background service",
+  "4d6d41e54272fac2": "Keep awake when plugged in",
+  "ef7a871e82ce5dd8": "Prevent the computer from sleeping while idle on AC power so remote devices can reach it anytime. Closing a laptop lid still sleeps it.",
+  "1cf021158593bae2": "Reset keep awake when plugged in to default",
+  "237d3b960bb609c5": "caffeinate sleep prevent stay awake idle ac power remote connect always on",
+  "9af3822eb67a58e9": "keep running close window resident service daemon remote access auto start"
 }
