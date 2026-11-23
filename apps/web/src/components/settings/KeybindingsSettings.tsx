@@ -35,6 +35,7 @@ import {
 } from "@t3tools/contracts";
 import {
   mergeWithDefaultKeybindings,
+  parseKeybindingShortcut,
   parseKeybindingWhenExpression,
 } from "@t3tools/shared/keybindings";
 import {
@@ -84,6 +85,7 @@ import {
   DEFAULT_WHEN_VARIABLE,
   isKnownWhenVariable,
   keybindingConflictLabels,
+  commandRecordsEscape,
   keybindingFromKeyboardEvent,
   parseWhenExpressionDraft,
   groupKeybindingRows,
@@ -800,9 +802,9 @@ function useKeybindingRowEditor({
   const captureKeybinding = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === "Tab" && !isRecording) return;
     event.preventDefault();
-    if (event.key === "Escape") {
-      // An unhandled Escape closes the settings page.
-      event.stopPropagation();
+    // An unhandled Escape closes the settings page.
+    if (event.key === "Escape") event.stopPropagation();
+    if (event.key === "Escape" && !(isRecording && commandRecordsEscape(row.command))) {
       const field = event.currentTarget;
       flushSync(() =>
         setDraft({
@@ -822,7 +824,12 @@ function useKeybindingRowEditor({
       layoutCharacter: true,
     });
     if (!next) return;
-    setKeyDraft(next, { isRecording: false });
+    if (event.key !== "Escape") {
+      setKeyDraft(next, { isRecording: false });
+      return;
+    }
+    flushSync(() => setKeyDraft(next, { isRecording: false }));
+    pillRef.current?.focus();
   };
 
   return {
@@ -1188,12 +1195,19 @@ function useNewKeybindingDraft({
     });
   };
 
+  const selectCommand = (command: KeybindingCommand) => {
+    setCommandDraft(command);
+    if (!commandRecordsEscape(command) && parseKeybindingShortcut(keyDraft)?.key === "escape") {
+      setDraft({ keyDraft: "" });
+    }
+  };
+
   const captureKeybinding = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === "Tab" && !isRecording) return;
     event.preventDefault();
-    if (event.key === "Escape") {
-      // An unhandled Escape closes the settings page.
-      event.stopPropagation();
+    // An unhandled Escape closes the settings page.
+    if (event.key === "Escape") event.stopPropagation();
+    if (event.key === "Escape" && !(isRecording && commandRecordsEscape(commandDraft))) {
       setDraft({ keyDraft: "", isRecording: false });
       event.currentTarget.blur();
       return;
@@ -1207,7 +1221,7 @@ function useNewKeybindingDraft({
 
   return {
     commandDraft,
-    setCommandDraft,
+    selectCommand,
     keyDraft,
     whenDraft,
     whenDraftExpression,
@@ -1266,7 +1280,7 @@ function NewKeybindingCommandSelect({
       }
       autoHighlight
       value={draft.commandDraft || null}
-      onValueChange={(value) => value && draft.setCommandDraft(value)}
+      onValueChange={(value) => value && draft.selectCommand(value)}
     >
       <ComboboxTrigger
         aria-label={gt("Command")}

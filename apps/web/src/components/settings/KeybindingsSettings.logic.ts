@@ -598,6 +598,10 @@ function normalizeShortcutKeyToken(key: string): string | null {
   return null;
 }
 
+export function commandRecordsEscape(command: string): boolean {
+  return command === "thread.stop";
+}
+
 export function keybindingFromKeyboardEvent(
   event: Pick<KeyboardEvent, "key" | "code" | "metaKey" | "ctrlKey" | "altKey" | "shiftKey">,
   platform: string,

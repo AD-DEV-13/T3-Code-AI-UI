@@ -1,5 +1,6 @@
 import type { KeybindingCommand, ResolvedKeybindingsConfig } from "@t3tools/contracts";
 import { useEffect, useEffectEvent } from "react";
+import { useStableCallback } from "../../hooks/useStableCallback";
 import { isCommandPaletteOpen } from "../../commandPaletteBus";
 import { resolveChatShortcutCommand, type ShortcutMatchContext } from "../../keybindings";
 import { isTerminalCloseConfirmPending } from "../../lib/terminalCloseConfirm";
@@ -13,6 +14,21 @@ import type { ComposerHandleRef } from "../../composerHandleContext";
 import type { BranchToolbarHandle } from "../BranchToolbar";
 import { shouldTypeToFocusComposer } from "./composerFocusRedirect";
 import { composerShortcutCommands } from "./composerShortcuts";
+
+// `:popover-open` throws in browsers without the Popover API.
+const popoverSupported = typeof HTMLElement !== "undefined" && "popover" in HTMLElement.prototype;
+
+/** Surfaces that keep Escape for themselves, even from a stop binding with no when clause. */
+function surfaceKeepsEscape(context: ShortcutMatchContext & { readonly modelPickerOpen: boolean }) {
+  return (
+    context.terminalFocus ||
+    context.previewFocus ||
+    context.modelPickerOpen ||
+    (context.editableFocus && !context.composerFocus) ||
+    // A native popover, such as a full screen MCP app, closes on this Escape unless it is prevented.
+    (popoverSupported && document.querySelector(":popover-open") !== null)
+  );
+}
 
 /** Returning false lets the key event through untouched. */
 type ChatShortcutHandler = (context: {
@@ -53,13 +69,33 @@ interface ChatShortcutsInput {
 }
 
 /**
- * The chat's window keyboard shortcuts, plus Escape closing thread find.
+ * The chat's window keyboard shortcuts, plus Escape closing thread find or stopping the turn.
  * Listeners attach once; the effect events read the latest input, so handlers
  * act on the current render without re-registering on every change.
  */
 export function useChatShortcuts(input: ChatShortcutsInput) {
   const embedded = input.embedded === true;
   const composerElement = embedded ? (input.composerElement ?? null) : null;
+  const isStopEscape = useStableCallback((event: KeyboardEvent) => {
+    if (
+      embedded ||
+      !input.enabled ||
+      input.threadFindActive ||
+      event.key !== "Escape" ||
+      event.isComposing ||
+      event.keyCode === 229 ||
+      isCommandPaletteOpen() ||
+      isInSideChatPane(event.target)
+    )
+      return false;
+    const context = input.getShortcutContext(event.target);
+    if (surfaceKeepsEscape(context)) return false;
+    return (
+      resolveChatShortcutCommand(event, input.keybindings, input.scriptKeybindings, {
+        context,
+      }) === "thread.stop"
+    );
+  });
   const handleShortcut = useEffectEvent((event: KeyboardEvent) => {
     const { keybindings } = input;
     if (preventRepeatedTerminalCloseShortcut(event, keybindings)) {
@@ -93,6 +129,8 @@ export function useChatShortcuts(input: ChatShortcutsInput) {
       context: shortcutContext,
     });
     if (!command || (inSideChatPane && !SIDE_CHAT_PANE_COMMANDS.has(command))) return;
+    const leftToUnclaimedEscape = command === "thread.stop" && event.key === "Escape";
+    if (leftToUnclaimedEscape) return;
     const run =
       input.commands[command] ??
       composerShortcutCommands(input.composerRef, input.branchToolbarRef)[command] ??
@@ -101,11 +139,9 @@ export function useChatShortcuts(input: ChatShortcutsInput) {
     event.preventDefault();
     event.stopPropagation();
   });
-  const dismissFind = useEffectEvent((event: KeyboardEvent) => {
+  const handleUnclaimedEscape = useEffectEvent((event: KeyboardEvent) => {
     if (
       event.key !== "Escape" ||
-      !input.threadFindActive ||
-      event.defaultPrevented ||
       event.isComposing ||
       event.keyCode === 229 ||
       isCommandPaletteOpen() ||
@@ -113,9 +149,18 @@ export function useChatShortcuts(input: ChatShortcutsInput) {
     )
       return;
     const context = input.getShortcutContext(event.target);
-    if (context.terminalFocus || context.previewFocus || context.modelPickerOpen) return;
+    // ProseMirror prevents every Escape, so a claim made while the composer has focus must
+    // also stop propagation, as the composer's own claims do.
+    if (event.defaultPrevented && !context.composerFocus) return;
+    if (input.threadFindActive) {
+      if (context.terminalFocus || context.previewFocus || context.modelPickerOpen) return;
+      event.preventDefault();
+      input.closeThreadFind();
+      return;
+    }
+    const stop = isStopEscape(event) ? input.commands["thread.stop"] : undefined;
+    if (!stop || stop({ event, terminalFocusOwner: getTerminalFocusOwner() }) === false) return;
     event.preventDefault();
-    input.closeThreadFind();
   });
   const handleComposerShortcut = useEffectEvent((event: KeyboardEvent) => {
     if (event.defaultPrevented || isCommandPaletteOpen()) return;
@@ -129,7 +174,7 @@ export function useChatShortcuts(input: ChatShortcutsInput) {
     event.preventDefault();
     event.stopPropagation();
   });
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- attaches keydown listeners for chat shortcuts and find dismissal: on the window, or on an embedded chat's composer
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- attaches keydown listeners for chat shortcuts and unclaimed Escape: on the window, or on an embedded chat's composer
   useEffect(() => {
     if (embedded) {
       if (composerElement === null) return;
@@ -138,7 +183,7 @@ export function useChatShortcuts(input: ChatShortcutsInput) {
       return () => composerElement.removeEventListener("keydown", onComposerKeyDown, true);
     }
     const onKeyDownCapture = (event: KeyboardEvent) => handleShortcut(event);
-    const onKeyDown = (event: KeyboardEvent) => dismissFind(event);
+    const onKeyDown = (event: KeyboardEvent) => handleUnclaimedEscape(event);
     window.addEventListener("keydown", onKeyDownCapture, true);
     window.addEventListener("keydown", onKeyDown);
     return () => {
@@ -146,4 +191,5 @@ export function useChatShortcuts(input: ChatShortcutsInput) {
       window.removeEventListener("keydown", onKeyDown);
     };
   }, [composerElement, embedded]);
+  return { isStopEscape };
 }

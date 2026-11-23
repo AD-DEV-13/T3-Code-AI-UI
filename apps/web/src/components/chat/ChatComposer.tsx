@@ -440,6 +440,8 @@ export interface ChatComposerProps {
   settings: UnifiedSettings;
   keybindings: ResolvedKeybindingsConfig;
   getShortcutContext: (eventTarget: EventTarget | null) => ShortcutMatchContext;
+  stopShortcutLabel: string | null;
+  isStopShortcutEvent: (event: KeyboardEvent) => boolean;
   terminalOpen: boolean;
   gitCwd: string | null;
   pullRequestProjectId: ProjectId | null;
@@ -572,6 +574,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     settings,
     keybindings,
     getShortcutContext,
+    stopShortcutLabel,
+    isStopShortcutEvent,
     terminalOpen,
     gitCwd,
     pullRequestProjectId,
@@ -3777,6 +3781,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   hasSendableContent={hasMessageToSend}
                   isEditingQueuedMessage={isEditingQueuedMessage}
                   onInterrupt={handleInterruptPrimaryActionStable}
+                  stopShortcutLabel={stopShortcutLabel}
+                  isStopShortcutEvent={isStopShortcutEvent}
                 >
                   <button
                     type="button"
@@ -4094,6 +4100,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                         },
                       },
                     )}
+                    stopShortcutLabel={stopShortcutLabel}
+                    isStopShortcutEvent={isStopShortcutEvent}
                     voiceInputActive={voiceInputActive}
                     isSendBusy={isSendBusy}
                     isSendHeld={composerSendHeld}

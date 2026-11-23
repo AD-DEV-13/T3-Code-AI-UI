@@ -2900,7 +2900,7 @@ export default function ChatView(props: ChatViewProps) {
     }
   });
 
-  useChatShortcuts({
+  const { isStopEscape } = useChatShortcuts({
     enabled: activeThreadId !== null && !backgroundThread,
     embedded,
     composerElement: composerOverlayElement,
@@ -3921,6 +3921,14 @@ export default function ChatView(props: ChatViewProps) {
                                 settings={settings}
                                 keybindings={keybindings}
                                 getShortcutContext={getShortcutContextStable}
+                                stopShortcutLabel={
+                                  embedded
+                                    ? null
+                                    : shortcutLabelForCommand(keybindings, "thread.stop", {
+                                        context: { composerFocus: true, turnRunning: true },
+                                      })
+                                }
+                                isStopShortcutEvent={isStopEscape}
                                 terminalOpen={Boolean(terminalUiState.terminalOpen)}
                                 gitCwd={gitCwd}
                                 pullRequestProjectId={

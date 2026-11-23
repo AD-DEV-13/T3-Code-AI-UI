@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { AssistantCitationRequest, AssistantCitationTarget } from "./AssistantCitationSource";
 import type { CitationPhase } from "./citationProcedure";
+import { claimEscape } from "../../lib/claimEscape";
 
 const CITATION_SCROLL_KEYS = new Set([
   "ArrowUp",
@@ -90,6 +91,8 @@ export function useAssistantCitationTarget({
       };
       const onKeyDown = (event: KeyboardEvent) => {
         if (event.key === "Escape") {
+          const activation = activationRef.current;
+          if (!activation.dismissed && !activation.scrolled && !done) claimEscape(event);
           dismiss(false);
         } else if (
           CITATION_SCROLL_KEYS.has(event.key) &&
@@ -132,6 +135,10 @@ export function useAssistantCitationTarget({
   // listeners join once it exists.
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes document and viewport listeners that dismiss the pending citation scroll
   useEffect(() => current?.attachDismissal(viewport), [current, viewport]);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- a failed citation shows nothing, so it stops claiming Escape
+  useEffect(() => {
+    if (phase?._tag === "failed") current?.retire();
+  }, [current, phase?._tag]);
 
   const settled = current !== null && settlement?.target === current.target ? settlement : null;
   const target =
