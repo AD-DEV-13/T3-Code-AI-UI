@@ -73,7 +73,9 @@ export const layer: Layer.Layer<
       readonly runId: RunId;
       readonly scopeId: CheckpointScopeId;
     }) {
-      const context = yield* projections.getCheckpointCaptureContext(input.threadId, input);
+      const context = yield* projections.getCheckpointCaptureContext(input.threadId, input, {
+        preservedCheckpoints: "baselines",
+      });
       const { run, rootNode, scope, providerThread, preservedCheckpointOrdinals, sideChat } =
         context;
       // Stopped runs remain terminal; their checkpoint is the next message's rollback point.
