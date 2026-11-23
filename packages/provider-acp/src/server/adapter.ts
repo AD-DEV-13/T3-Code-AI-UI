@@ -459,11 +459,13 @@ export interface AcpAdapterV2Flavor {
   readonly ignoreSessionUpdate?: (notification: EffectAcpSchema.SessionNotification) => boolean;
   readonly onAvailableCommandsUpdate?: (
     commands: ReadonlyArray<EffectAcpSchema.AvailableCommand>,
+    runtime?: AcpSessionRuntime.AcpSessionRuntime["Service"],
   ) => Effect.Effect<void>;
   readonly onSessionConfigurationUpdate?: (
     configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption>,
     modeState: AcpSessionModeState | undefined,
     modelState: EffectAcpSchema.SessionModelState | null | undefined,
+    runtime?: AcpSessionRuntime.AcpSessionRuntime["Service"],
   ) => Effect.Effect<void>;
   readonly onUrlElicitation?: (input: {
     readonly elicitationId: string;
@@ -7161,7 +7163,9 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                   );
                   return updated;
                 });
-                yield* flavor.onAvailableCommandsUpdate?.(advertisedCommands) ?? Effect.void;
+                yield* (
+                  flavor.onAvailableCommandsUpdate?.(advertisedCommands, runtime) ?? Effect.void
+                );
               }
               if (
                 notification.update.sessionUpdate === "config_option_update" ||
@@ -7172,6 +7176,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                     yield* runtime.getConfigOptions,
                     yield* runtime.getModeState,
                     (yield* Ref.get(activeSessionSetup))?.sessionSetupResult.models,
+                    runtime,
                   ) ?? Effect.void
                 );
               }
@@ -7308,6 +7313,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               yield* targetRuntime.getConfigOptions,
               yield* targetRuntime.getModeState,
               result.sessionSetupResult.models,
+              targetRuntime,
             ) ?? Effect.void
           );
         });
@@ -8448,6 +8454,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               yield* runtime.getConfigOptions,
               yield* runtime.getModeState,
               (yield* Ref.get(activeSessionSetup))?.sessionSetupResult.models,
+              runtime,
             ) ?? Effect.void
           );
         });

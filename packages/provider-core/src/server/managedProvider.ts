@@ -69,7 +69,12 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
     readonly snapshot: ServerProvider;
     readonly getSnapshot: Effect.Effect<ServerProvider>;
     readonly publishSnapshot: (snapshot: ServerProvider) => Effect.Effect<void>;
+    readonly tryPublishSnapshot: (
+      snapshot: ServerProvider,
+      onAccepted?: () => void,
+    ) => Effect.Effect<boolean>;
   }) => Effect.Effect<void>;
+  readonly reconcileCheckedSnapshot?: (probed: ServerProvider) => ServerProvider;
   readonly refreshInterval?: Duration.Input;
   readonly refreshOnInterval?: boolean | ((snapshot: ServerProvider) => boolean);
   readonly checkProviderOnSettingsChange?: (previous: Settings, next: Settings) => boolean;
@@ -101,30 +106,37 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
   const publishEnrichedSnapshot = Effect.fn("publishEnrichedSnapshot")(function* (
     generation: number,
     nextSnapshot: ServerProvider,
-  ) {
-    const snapshotToPublish = yield* Ref.modify(snapshotStateRef, (state) => {
+    onAccepted?: () => void,
+  ): Effect.fn.Return<boolean> {
+    const outcome = yield* Ref.modify(snapshotStateRef, (state) => {
+      let applied = true;
+      let snapshot: ServerProvider | null = null;
+      let nextState = state;
       if (state.enrichmentGeneration !== generation) {
-        return [null, state] as const;
+        applied = false;
+      } else {
+        onAccepted?.();
+        // Enrichment must not revert usage updates newer than its input snapshot.
+        const merged = withUsageLimits(
+          state.usageAuthLabel === undefined
+            ? nextSnapshot
+            : {
+                ...nextSnapshot,
+                auth: { ...nextSnapshot.auth, label: state.usageAuthLabel ?? undefined },
+              },
+          state.snapshot.usageLimits,
+        );
+        if (!Equal.equals(state.snapshot, merged)) {
+          snapshot = merged;
+          nextState = { ...state, snapshot: merged };
+        }
       }
-      // Enrichment must not revert usage updates newer than its input snapshot.
-      const merged = withUsageLimits(
-        state.usageAuthLabel === undefined
-          ? nextSnapshot
-          : {
-              ...nextSnapshot,
-              auth: { ...nextSnapshot.auth, label: state.usageAuthLabel ?? undefined },
-            },
-        state.snapshot.usageLimits,
-      );
-      if (Equal.equals(state.snapshot, merged)) {
-        return [null, state] as const;
-      }
-      return [merged, { ...state, snapshot: merged }] as const;
+      return [{ applied, snapshot }, nextState] as const;
     });
-    if (snapshotToPublish === null) {
-      return;
+    if (outcome.snapshot !== null) {
+      yield* PubSub.publish(changesPubSub, outcome.snapshot);
     }
-    yield* PubSub.publish(changesPubSub, snapshotToPublish);
+    return outcome.applied;
   });
 
   const restartSnapshotEnrichment = Effect.fn("restartSnapshotEnrichment")(function* (
@@ -146,7 +158,10 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
         settings,
         snapshot,
         getSnapshot: Ref.get(snapshotStateRef).pipe(Effect.map((state) => state.snapshot)),
-        publishSnapshot: (nextSnapshot) => publishEnrichedSnapshot(generation, nextSnapshot),
+        publishSnapshot: (nextSnapshot) =>
+          publishEnrichedSnapshot(generation, nextSnapshot).pipe(Effect.asVoid),
+        tryPublishSnapshot: (nextSnapshot, onAccepted) =>
+          publishEnrichedSnapshot(generation, nextSnapshot, onAccepted),
       })
       .pipe(Effect.ignoreCause({ log: true }), Effect.forkIn(scope));
 
@@ -208,38 +223,41 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
         const generation = input.enrichSnapshot
           ? state.enrichmentGeneration + 1
           : state.enrichmentGeneration;
+        const checkedSnapshot = input.reconcileCheckedSnapshot
+          ? input.reconcileCheckedSnapshot(probedSnapshot)
+          : probedSnapshot;
         // Failed reads retain limits only for the same account and original workspace.
         const previous = state.snapshot.auth;
         const differs = (a: string | undefined, b: string | undefined) =>
           a !== undefined && b !== undefined && a !== b;
         const switchedAccount =
-          differs(probedSnapshot.auth.email?.toLowerCase(), previous.email?.toLowerCase()) ||
-          (probedSnapshot.auth.workspaceId !== undefined &&
-            probedSnapshot.auth.workspaceId !== previous.workspaceId);
+          differs(checkedSnapshot.auth.email?.toLowerCase(), previous.email?.toLowerCase()) ||
+          (checkedSnapshot.auth.workspaceId !== undefined &&
+            checkedSnapshot.auth.workspaceId !== previous.workspaceId);
         const usageLimits = switchedAccount
-          ? probedSnapshot.usageLimits
-          : probedSnapshot.usageLimits === undefined &&
+          ? checkedSnapshot.usageLimits
+          : checkedSnapshot.usageLimits === undefined &&
               state.snapshot.usageLimits !== usageBeforeProbe
             ? state.snapshot.usageLimits
             : resolveUsageLimitsAfterProbe({
                 published: state.snapshot.usageLimits,
-                probed: probedSnapshot.usageLimits,
+                probed: checkedSnapshot.usageLimits,
               });
         const workspaceId =
-          usageLimits === probedSnapshot.usageLimits ? undefined : state.snapshot.auth.workspaceId;
+          usageLimits === checkedSnapshot.usageLimits ? undefined : state.snapshot.auth.workspaceId;
         const usageAuthLabel =
           !switchedAccount && usageLimits?.checkedAt === state.snapshot.usageLimits?.checkedAt
             ? state.usageAuthLabel
             : undefined;
         const labeledProbe =
           usageAuthLabel === undefined
-            ? probedSnapshot
+            ? checkedSnapshot
             : {
-                ...probedSnapshot,
-                auth: { ...probedSnapshot.auth, label: usageAuthLabel ?? undefined },
+                ...checkedSnapshot,
+                auth: { ...checkedSnapshot.auth, label: usageAuthLabel ?? undefined },
               };
         const snapshot = withUsageLimits(
-          workspaceId && !probedSnapshot.auth.workspaceId
+          workspaceId && !checkedSnapshot.auth.workspaceId
             ? { ...labeledProbe, auth: { ...labeledProbe.auth, workspaceId } }
             : labeledProbe,
           usageLimits,

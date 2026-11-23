@@ -17,14 +17,19 @@ import * as Stream from "effect/Stream";
 
 import type { AcpRegistryAvailableCommands, AcpRegistryLiveConfiguration } from "./probe.ts";
 
-interface AvailableCommandsUpdate {
-  readonly instanceId: ProviderInstanceId;
-  readonly commands: AcpRegistryAvailableCommands;
+export interface AcpRegistryLiveUpdateMeta {
+  readonly runtimeIdentity: string | undefined;
+  readonly isCurrent: Effect.Effect<boolean>;
 }
 
-interface LiveConfigurationUpdate {
-  readonly instanceId: ProviderInstanceId;
-  readonly configuration: AcpRegistryLiveConfiguration;
+export interface AcpRegistryClearLiveStateOptions {
+  readonly preserveRuntimeIdentity?: string;
+  readonly dispose?: boolean;
+}
+
+export interface AcpRegistryReadLiveStateOptions {
+  readonly runtimeIdentity?: string;
+  readonly requireMatchingRuntimeIdentity?: boolean;
 }
 
 interface UrlAuthActionUpdate {
@@ -54,29 +59,45 @@ export class AcpRegistryRuntimeCoordinator extends Context.Service<
     readonly withSessionMutation: <A, E, R>(
       effect: Effect.Effect<A, E, R>,
     ) => Effect.Effect<A, E, R>;
-    readonly clearAvailableCommands: (instanceId: ProviderInstanceId) => Effect.Effect<void>;
+    readonly clearAvailableCommands: (
+      instanceId: ProviderInstanceId,
+      options?: AcpRegistryClearLiveStateOptions,
+    ) => Effect.Effect<void>;
     readonly publishAvailableCommands: (
       instanceId: ProviderInstanceId,
       commands: AcpRegistryAvailableCommands,
+      runtimeIdentity?: string,
     ) => Effect.Effect<void>;
     readonly getAvailableCommands: (
       instanceId: ProviderInstanceId,
+      options?: AcpRegistryReadLiveStateOptions,
     ) => Effect.Effect<Option.Option<AcpRegistryAvailableCommands>>;
     readonly watchAvailableCommands: (
       instanceId: ProviderInstanceId,
-      onUpdate: (commands: AcpRegistryAvailableCommands) => Effect.Effect<void>,
+      onUpdate: (
+        commands: AcpRegistryAvailableCommands,
+        meta: AcpRegistryLiveUpdateMeta,
+      ) => Effect.Effect<void>,
     ) => Effect.Effect<void>;
-    readonly clearLiveConfiguration: (instanceId: ProviderInstanceId) => Effect.Effect<void>;
+    readonly clearLiveConfiguration: (
+      instanceId: ProviderInstanceId,
+      options?: AcpRegistryClearLiveStateOptions,
+    ) => Effect.Effect<void>;
     readonly publishLiveConfiguration: (
       instanceId: ProviderInstanceId,
       configuration: AcpRegistryLiveConfiguration,
+      runtimeIdentity?: string,
     ) => Effect.Effect<void>;
     readonly getLiveConfiguration: (
       instanceId: ProviderInstanceId,
+      options?: AcpRegistryReadLiveStateOptions,
     ) => Effect.Effect<Option.Option<AcpRegistryLiveConfiguration>>;
     readonly watchLiveConfiguration: (
       instanceId: ProviderInstanceId,
-      onUpdate: (configuration: AcpRegistryLiveConfiguration) => Effect.Effect<void>,
+      onUpdate: (
+        configuration: AcpRegistryLiveConfiguration,
+        meta: AcpRegistryLiveUpdateMeta,
+      ) => Effect.Effect<void>,
     ) => Effect.Effect<void>;
     readonly requestUrlAuthentication: (
       instanceId: ProviderInstanceId,
@@ -95,17 +116,282 @@ export class AcpRegistryRuntimeCoordinator extends Context.Service<
   }
 >()("@t3tools/provider-acp-registry/server/AcpRegistryRuntimeCoordinator") {}
 
+interface LiveStateClearState {
+  readonly allBeforeRevision: number;
+  readonly nonMatchingBeforeRevision: number;
+  readonly preservedRuntimeIdentity: string | undefined;
+}
+
+function recordLiveStateClear(
+  current: LiveStateClearState | undefined,
+  clearRevision: number,
+  options?: AcpRegistryClearLiveStateOptions,
+): LiveStateClearState {
+  const preserveRuntimeIdentity = options?.preserveRuntimeIdentity;
+  if (preserveRuntimeIdentity === undefined) {
+    return {
+      allBeforeRevision: clearRevision,
+      nonMatchingBeforeRevision: clearRevision,
+      preservedRuntimeIdentity: undefined,
+    };
+  }
+  const previousAllBefore = current?.allBeforeRevision ?? 0;
+  const previousPreservedExpired =
+    current !== undefined && current.preservedRuntimeIdentity !== preserveRuntimeIdentity
+      ? current.nonMatchingBeforeRevision
+      : 0;
+  return {
+    allBeforeRevision: Math.max(previousAllBefore, previousPreservedExpired),
+    nonMatchingBeforeRevision: clearRevision,
+    preservedRuntimeIdentity: preserveRuntimeIdentity,
+  };
+}
+
+function isLiveUpdateCurrent(
+  clearState: LiveStateClearState | undefined,
+  updateRevision: number,
+  runtimeIdentity: string | undefined,
+): boolean {
+  if (clearState === undefined) return true;
+  if (updateRevision < clearState.allBeforeRevision) return false;
+  if (
+    updateRevision < clearState.nonMatchingBeforeRevision &&
+    (clearState.preservedRuntimeIdentity === undefined ||
+      runtimeIdentity !== clearState.preservedRuntimeIdentity)
+  ) {
+    return false;
+  }
+  return true;
+}
+
+interface ChannelEntry<T> {
+  readonly value: T;
+  readonly runtimeIdentity: string | undefined;
+  readonly revision: number;
+  readonly lifetime: number;
+}
+
+interface InstanceChannelState<T> {
+  readonly lifetime: number;
+  readonly entries: ReadonlyMap<string | undefined, ChannelEntry<T>>;
+  readonly latestKey: string | undefined;
+  readonly hasLatest: boolean;
+  readonly clear: LiveStateClearState | undefined;
+}
+
+interface ChannelState<T> {
+  readonly revision: number;
+  readonly instances: ReadonlyMap<ProviderInstanceId, InstanceChannelState<T>>;
+}
+
+interface ChannelUpdate<T> {
+  readonly instanceId: ProviderInstanceId;
+  readonly value: T;
+  readonly runtimeIdentity: string | undefined;
+  readonly revision: number;
+  readonly lifetime: number;
+}
+
+interface LiveStateChannelNames {
+  readonly clear: string;
+  readonly publish: string;
+  readonly get: string;
+  readonly watch: string;
+}
+
+const makeLiveStateChannel = Effect.fn("AcpRegistryRuntimeCoordinator.makeLiveStateChannel")(
+  function* <T>(names: LiveStateChannelNames) {
+    const updates = yield* PubSub.unbounded<ChannelUpdate<T>>();
+    const publishPermit = yield* Semaphore.make(1);
+    const stateRef = yield* Ref.make<ChannelState<T>>({
+      revision: 0,
+      instances: new Map(),
+    });
+
+    const clear = Effect.fn(`AcpRegistryRuntimeCoordinator.${names.clear}`)(function* (
+      instanceId: ProviderInstanceId,
+      options?: AcpRegistryClearLiveStateOptions,
+    ) {
+      yield* Ref.update(stateRef, (state) => {
+        const revision = state.revision + 1;
+        const nextInstances = new Map(state.instances);
+        if (options?.dispose === true) {
+          nextInstances.delete(instanceId);
+          return { revision, instances: nextInstances };
+        }
+        const existing = state.instances.get(instanceId);
+        const lifetime = existing?.lifetime ?? revision;
+        const nextClear = recordLiveStateClear(existing?.clear, revision, options);
+        const nextEntries = new Map<string | undefined, ChannelEntry<T>>();
+        if (existing !== undefined) {
+          for (const [key, entry] of existing.entries) {
+            if (isLiveUpdateCurrent(nextClear, entry.revision, entry.runtimeIdentity)) {
+              nextEntries.set(key, entry);
+            }
+          }
+        }
+        const latestEntry =
+          existing !== undefined && existing.hasLatest
+            ? nextEntries.get(existing.latestKey)
+            : undefined;
+        const fallbackLatest =
+          latestEntry ??
+          Array.from(nextEntries.values()).reduce<ChannelEntry<T> | undefined>(
+            (best, entry) => (best === undefined || entry.revision > best.revision ? entry : best),
+            undefined,
+          );
+        nextInstances.set(instanceId, {
+          lifetime,
+          entries: nextEntries,
+          latestKey: fallbackLatest?.runtimeIdentity,
+          hasLatest: fallbackLatest !== undefined,
+          clear: nextClear,
+        });
+        return { revision, instances: nextInstances };
+      });
+    });
+
+    const publish = Effect.fn(`AcpRegistryRuntimeCoordinator.${names.publish}`)(function* (
+      instanceId: ProviderInstanceId,
+      value: T,
+      runtimeIdentity?: string,
+    ) {
+      // Serialize state commit and PubSub publication so watchers always observe monotonic revisions.
+      yield* publishPermit.withPermits(1)(
+        Effect.uninterruptible(
+          Ref.modify(stateRef, (state) => {
+            const revision = state.revision + 1;
+            const existing = state.instances.get(instanceId);
+            const lifetime = existing?.lifetime ?? revision;
+            const nextEntries = new Map(existing?.entries);
+            nextEntries.set(runtimeIdentity, { value, runtimeIdentity, revision, lifetime });
+            const nextInstances = new Map(state.instances);
+            nextInstances.set(instanceId, {
+              lifetime,
+              entries: nextEntries,
+              latestKey: runtimeIdentity,
+              hasLatest: true,
+              clear: existing?.clear,
+            });
+            const update: ChannelUpdate<T> = {
+              instanceId,
+              value,
+              runtimeIdentity,
+              revision,
+              lifetime,
+            };
+            return [update, { revision, instances: nextInstances }] as const;
+          }).pipe(
+            Effect.flatMap((event) => PubSub.publish(updates, event)),
+            Effect.asVoid,
+          ),
+        ),
+      );
+    });
+
+    const get = Effect.fn(`AcpRegistryRuntimeCoordinator.${names.get}`)(function* (
+      instanceId: ProviderInstanceId,
+      options?: AcpRegistryReadLiveStateOptions,
+    ) {
+      const inst = (yield* Ref.get(stateRef)).instances.get(instanceId);
+      if (inst === undefined) return Option.none<T>();
+      const validEntry = (entry: ChannelEntry<T> | undefined): Option.Option<T> =>
+        entry !== undefined &&
+        isLiveUpdateCurrent(inst.clear, entry.revision, entry.runtimeIdentity)
+          ? Option.some(entry.value)
+          : Option.none();
+      if (options?.runtimeIdentity !== undefined) {
+        const exact = validEntry(inst.entries.get(options.runtimeIdentity));
+        if (Option.isSome(exact)) return exact;
+        if (options.requireMatchingRuntimeIdentity === true) return Option.none<T>();
+        return validEntry(inst.entries.get(undefined));
+      }
+      if (inst.clear?.preservedRuntimeIdentity !== undefined) {
+        const preserved = validEntry(inst.entries.get(inst.clear.preservedRuntimeIdentity));
+        if (Option.isSome(preserved)) return preserved;
+      }
+      return inst.hasLatest ? validEntry(inst.entries.get(inst.latestKey)) : Option.none<T>();
+    });
+
+    const watch = (
+      instanceId: ProviderInstanceId,
+      onUpdate: (value: T, meta: AcpRegistryLiveUpdateMeta) => Effect.Effect<void>,
+    ) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          // Trace subscription setup once without keeping a long-lived parent span around callbacks.
+          const { subscription, snapshot } = yield* Effect.gen(function* () {
+            // Subscribe before reading to avoid missing publications.
+            const sub = yield* PubSub.subscribe(updates);
+            const snap = yield* Ref.get(stateRef);
+            return { subscription: sub, snapshot: snap };
+          }).pipe(Effect.withSpan(`AcpRegistryRuntimeCoordinator.${names.watch}.subscribe`));
+          const snapshotRevision = snapshot.revision;
+          const inst = snapshot.instances.get(instanceId);
+          const metaFor = (
+            runtimeIdentity: string | undefined,
+            revision: number,
+            lifetime: number,
+          ): AcpRegistryLiveUpdateMeta => ({
+            runtimeIdentity,
+            isCurrent: Ref.get(stateRef).pipe(
+              Effect.map((state) => {
+                const current = state.instances.get(instanceId);
+                return (
+                  current !== undefined &&
+                  current.lifetime === lifetime &&
+                  isLiveUpdateCurrent(current.clear, revision, runtimeIdentity)
+                );
+              }),
+            ),
+          });
+          const replayed =
+            inst === undefined
+              ? []
+              : Array.from(inst.entries.values())
+                  .filter((entry) =>
+                    isLiveUpdateCurrent(inst.clear, entry.revision, entry.runtimeIdentity),
+                  )
+                  .toSorted((left, right) => left.revision - right.revision);
+          for (const entry of replayed) {
+            yield* onUpdate(
+              entry.value,
+              metaFor(entry.runtimeIdentity, entry.revision, entry.lifetime),
+            );
+          }
+          yield* Stream.fromSubscription(subscription).pipe(
+            Stream.filter(
+              (update) => update.instanceId === instanceId && update.revision > snapshotRevision,
+            ),
+            Stream.runForEach((update) =>
+              onUpdate(
+                update.value,
+                metaFor(update.runtimeIdentity, update.revision, update.lifetime),
+              ),
+            ),
+          );
+        }),
+      );
+
+    return { clear, publish, get, watch } as const;
+  },
+);
+
 const make = Effect.gen(function* () {
   const foregroundStarts = yield* PubSub.unbounded<string>();
   const activeForegroundCounts = yield* Ref.make(new Map<string, number>());
-  const availableCommandsUpdates = yield* PubSub.unbounded<AvailableCommandsUpdate>();
-  const availableCommandsByInstance = yield* Ref.make(
-    new Map<ProviderInstanceId, AcpRegistryAvailableCommands>(),
-  );
-  const liveConfigurationUpdates = yield* PubSub.unbounded<LiveConfigurationUpdate>();
-  const liveConfigurationByInstance = yield* Ref.make(
-    new Map<ProviderInstanceId, AcpRegistryLiveConfiguration>(),
-  );
+  const availableCommandsChannel = yield* makeLiveStateChannel<AcpRegistryAvailableCommands>({
+    clear: "clearAvailableCommands",
+    publish: "publishAvailableCommands",
+    get: "getAvailableCommands",
+    watch: "watchAvailableCommands",
+  });
+  const liveConfigurationChannel = yield* makeLiveStateChannel<AcpRegistryLiveConfiguration>({
+    clear: "clearLiveConfiguration",
+    publish: "publishLiveConfiguration",
+    get: "getLiveConfiguration",
+    watch: "watchLiveConfiguration",
+  });
   const urlAuthActionUpdates = yield* PubSub.unbounded<UrlAuthActionUpdate>();
   const pendingUrlAuthActions = yield* Ref.make(
     new Map<ProviderInstanceId, PendingUrlAuthAction>(),
@@ -158,95 +444,6 @@ const make = Effect.gen(function* () {
     effect,
   ) => sessionMutationPermit.withPermit(effect);
 
-  const clearAvailableCommands: AcpRegistryRuntimeCoordinator["Service"]["clearAvailableCommands"] =
-    (instanceId) =>
-      Ref.update(availableCommandsByInstance, (current) => {
-        const next = new Map(current);
-        next.delete(instanceId);
-        return next;
-      });
-
-  const publishAvailableCommands: AcpRegistryRuntimeCoordinator["Service"]["publishAvailableCommands"] =
-    (instanceId, commands) =>
-      Ref.update(availableCommandsByInstance, (current) => {
-        const next = new Map(current);
-        next.set(instanceId, commands);
-        return next;
-      }).pipe(
-        Effect.andThen(
-          PubSub.publish(availableCommandsUpdates, {
-            instanceId,
-            commands,
-          }),
-        ),
-        Effect.asVoid,
-      );
-
-  const getAvailableCommands: AcpRegistryRuntimeCoordinator["Service"]["getAvailableCommands"] =
-    Effect.fn("AcpRegistryRuntimeCoordinator.getAvailableCommands")(function* (instanceId) {
-      return Option.fromNullishOr((yield* Ref.get(availableCommandsByInstance)).get(instanceId));
-    });
-
-  const watchAvailableCommands: AcpRegistryRuntimeCoordinator["Service"]["watchAvailableCommands"] =
-    (instanceId, onUpdate) =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          // Subscribe before reading to avoid missing publications.
-          const subscription = yield* PubSub.subscribe(availableCommandsUpdates);
-          const current = yield* getAvailableCommands(instanceId);
-          if (Option.isSome(current)) {
-            yield* onUpdate(current.value);
-          }
-          yield* Stream.fromSubscription(subscription).pipe(
-            Stream.filter((update) => update.instanceId === instanceId),
-            Stream.runForEach((update) => onUpdate(update.commands)),
-          );
-        }),
-      );
-
-  const clearLiveConfiguration: AcpRegistryRuntimeCoordinator["Service"]["clearLiveConfiguration"] =
-    (instanceId) =>
-      Ref.update(liveConfigurationByInstance, (current) => {
-        const next = new Map(current);
-        next.delete(instanceId);
-        return next;
-      });
-
-  const publishLiveConfiguration: AcpRegistryRuntimeCoordinator["Service"]["publishLiveConfiguration"] =
-    (instanceId, configuration) =>
-      Ref.update(liveConfigurationByInstance, (current) =>
-        new Map(current).set(instanceId, configuration),
-      ).pipe(
-        Effect.andThen(
-          PubSub.publish(liveConfigurationUpdates, {
-            instanceId,
-            configuration,
-          }),
-        ),
-        Effect.asVoid,
-      );
-
-  const getLiveConfiguration: AcpRegistryRuntimeCoordinator["Service"]["getLiveConfiguration"] =
-    Effect.fn("AcpRegistryRuntimeCoordinator.getLiveConfiguration")(function* (instanceId) {
-      return Option.fromNullishOr((yield* Ref.get(liveConfigurationByInstance)).get(instanceId));
-    });
-
-  const watchLiveConfiguration: AcpRegistryRuntimeCoordinator["Service"]["watchLiveConfiguration"] =
-    (instanceId, onUpdate) =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const subscription = yield* PubSub.subscribe(liveConfigurationUpdates);
-          const current = yield* getLiveConfiguration(instanceId);
-          if (Option.isSome(current)) {
-            yield* onUpdate(current.value);
-          }
-          yield* Stream.fromSubscription(subscription).pipe(
-            Stream.filter((update) => update.instanceId === instanceId),
-            Stream.runForEach((update) => onUpdate(update.configuration)),
-          );
-        }),
-      );
-
   const publishUrlAuthAction = (
     instanceId: ProviderInstanceId,
     action: AcpRegistryUrlAuthAction | null,
@@ -284,10 +481,10 @@ const make = Effect.gen(function* () {
                 next.set(instanceId, { action: publishedAction, consent, expiresAt });
                 return [existing, next] as const;
               });
-              if (previous !== undefined) {
-                yield* Deferred.succeed(previous.consent, false).pipe(Effect.ignore);
-              }
               yield* publishUrlAuthAction(instanceId, publishedAction);
+              if (previous !== undefined) {
+                yield* Deferred.succeed(previous.consent, false);
+              }
             }),
           );
           return yield* Deferred.await(consent).pipe(
@@ -302,10 +499,20 @@ const make = Effect.gen(function* () {
 
   const acceptUrlAuthentication: AcpRegistryRuntimeCoordinator["Service"]["acceptUrlAuthentication"] =
     Effect.fn("AcpRegistryRuntimeCoordinator.acceptUrlAuthentication")(function* (input) {
-      const pending = (yield* Ref.get(pendingUrlAuthActions)).get(input.instanceId);
-      if (pending?.action.elicitationId !== input.elicitationId) return false;
-      if (DateTime.isGreaterThanOrEqualTo(yield* DateTime.now, pending.expiresAt)) {
-        yield* Deferred.succeed(pending.consent, false).pipe(Effect.ignore);
+      const now = yield* DateTime.now;
+      const pending = yield* Ref.modify(pendingUrlAuthActions, (current) => {
+        const existing = current.get(input.instanceId);
+        if (existing === undefined || existing.action.elicitationId !== input.elicitationId) {
+          return [undefined, current] as const;
+        }
+        const next = new Map(current);
+        next.delete(input.instanceId);
+        return [existing, next] as const;
+      });
+      if (pending === undefined) return false;
+      yield* publishUrlAuthAction(input.instanceId, null);
+      if (DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(pending.expiresAt)) {
+        yield* Deferred.succeed(pending.consent, false);
         return false;
       }
       return yield* Deferred.succeed(pending.consent, true);
@@ -314,7 +521,15 @@ const make = Effect.gen(function* () {
   const getUrlAuthAction: AcpRegistryRuntimeCoordinator["Service"]["getUrlAuthAction"] = Effect.fn(
     "AcpRegistryRuntimeCoordinator.getUrlAuthAction",
   )(function* (instanceId) {
-    return Option.fromNullishOr((yield* Ref.get(pendingUrlAuthActions)).get(instanceId)?.action);
+    const now = yield* DateTime.now;
+    const pending = (yield* Ref.get(pendingUrlAuthActions)).get(instanceId);
+    if (
+      pending === undefined ||
+      DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(pending.expiresAt)
+    ) {
+      return Option.none();
+    }
+    return Option.some(pending.action);
   });
 
   const watchUrlAuthAction: AcpRegistryRuntimeCoordinator["Service"]["watchUrlAuthAction"] = (
@@ -323,8 +538,11 @@ const make = Effect.gen(function* () {
   ) =>
     Effect.scoped(
       Effect.gen(function* () {
-        const subscription = yield* PubSub.subscribe(urlAuthActionUpdates);
-        const current = yield* getUrlAuthAction(instanceId);
+        const { subscription, current } = yield* Effect.gen(function* () {
+          const sub = yield* PubSub.subscribe(urlAuthActionUpdates);
+          const cur = yield* getUrlAuthAction(instanceId);
+          return { subscription: sub, current: cur };
+        }).pipe(Effect.withSpan("AcpRegistryRuntimeCoordinator.watchUrlAuthAction.subscribe"));
         if (Option.isSome(current)) {
           yield* onUpdate(current.value);
         }
@@ -339,14 +557,14 @@ const make = Effect.gen(function* () {
     withForegroundStartup,
     runBackgroundProbe,
     withSessionMutation,
-    clearAvailableCommands,
-    publishAvailableCommands,
-    getAvailableCommands,
-    watchAvailableCommands,
-    clearLiveConfiguration,
-    publishLiveConfiguration,
-    getLiveConfiguration,
-    watchLiveConfiguration,
+    clearAvailableCommands: availableCommandsChannel.clear,
+    publishAvailableCommands: availableCommandsChannel.publish,
+    getAvailableCommands: availableCommandsChannel.get,
+    watchAvailableCommands: availableCommandsChannel.watch,
+    clearLiveConfiguration: liveConfigurationChannel.clear,
+    publishLiveConfiguration: liveConfigurationChannel.publish,
+    getLiveConfiguration: liveConfigurationChannel.get,
+    watchLiveConfiguration: liveConfigurationChannel.watch,
     requestUrlAuthentication,
     acceptUrlAuthentication,
     getUrlAuthAction,

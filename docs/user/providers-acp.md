@@ -51,6 +51,18 @@ version published by the Registry. Their commands are available in a new server 
 sign-in and direct use. Removing an agent's last provider instance removes T3-managed binary files
 but keeps package installs. To use an existing local binary, set **Executable override** explicitly.
 
+T3 Code refreshes the Registry index in the background and automatically installs new versions of
+prepared, T3-managed Registry agents alongside earlier versions, deferring background updates while
+that agent is starting a session. If a newly published version of a T3-managed binary agent fails
+to download, verify, or unpack, T3 Code keeps running the newest previously installed version until
+the update succeeds (versions installed before T3 Code added this fallback can't be used for it).
+Agents using **Executable override** keep running the configured executable—update those
+overrides directly on the server—while Registry refreshes can still pick up updated Registry
+metadata, arguments, and environment variables. Refreshing providers (in **Settings → Providers** on
+web and desktop, or **Refresh providers** in environment settings on mobile) requests a fresh
+Registry check right away for unprepared or unavailable agents, and after the agent's status check
+finishes for installed agents.
+
 ## Signing in
 
 Open the agent's account section in **Settings → Providers** on web or desktop. Choose

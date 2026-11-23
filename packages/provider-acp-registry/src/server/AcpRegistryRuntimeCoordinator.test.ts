@@ -1,9 +1,11 @@
 import { describe, expect, it } from "@effect/vitest";
 import { ProviderInstanceId } from "@t3tools/contracts";
+import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
+import * as TestClock from "effect/testing/TestClock";
 
 import type { AcpRegistryAvailableCommands } from "./probe.ts";
 import * as AcpRegistryRuntimeCoordinator from "./AcpRegistryRuntimeCoordinator.ts";
@@ -173,6 +175,106 @@ describe("AcpRegistryRuntimeCoordinator", () => {
       ).toBe(true);
       expect(yield* Fiber.join(request)).toBe(true);
       expect(Option.isNone(yield* coordinator.getUrlAuthAction(instanceId))).toBe(true);
+
+      // Decouple current-time reads from TestClock sleep so the exact expiry boundary (>=) is
+      // tested in both getUrlAuthAction and acceptUrlAuthentication while the request is pending.
+      const baseClock = yield* Clock.Clock;
+      let clockNowMs = 0;
+      const decoupledClock: Clock.Clock = {
+        ...baseClock,
+        currentTimeMillisUnsafe: () => clockNowMs,
+        currentTimeMillis: Effect.sync(() => clockNowMs),
+        currentTimeNanosUnsafe: () => BigInt(clockNowMs) * 1_000_000n,
+        currentTimeNanos: Effect.sync(() => BigInt(clockNowMs) * 1_000_000n),
+        monotonicTimeNanosUnsafe: () => BigInt(clockNowMs) * 1_000_000n,
+        monotonicTimeNanos: Effect.sync(() => BigInt(clockNowMs) * 1_000_000n),
+        sleep: (duration) => baseClock.sleep(duration),
+      };
+      const withDecoupledClock = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+        effect.pipe(Effect.provideService(Clock.Clock, decoupledClock));
+
+      // Consent must still succeed 1 ms before expiry while the request is pending.
+      const beforeExpirySeen = yield* Deferred.make<void>();
+      const expiringWatcher = yield* coordinator
+        .watchUrlAuthAction(instanceId, (current) =>
+          current?.elicitationId === "login-before-expiry"
+            ? Deferred.succeed(beforeExpirySeen, undefined).pipe(Effect.asVoid)
+            : Effect.void,
+        )
+        .pipe(Effect.forkChild);
+      const beforeExpiryRequest = yield* withDecoupledClock(
+        coordinator.requestUrlAuthentication(instanceId, {
+          ...action,
+          elicitationId: "login-before-expiry",
+        }),
+      ).pipe(Effect.forkChild);
+      yield* Deferred.await(beforeExpirySeen);
+      clockNowMs = 10 * 60 * 1_000 - 1;
+      expect(
+        Option.isSome(yield* withDecoupledClock(coordinator.getUrlAuthAction(instanceId))),
+      ).toBe(true);
+      expect(
+        yield* withDecoupledClock(
+          coordinator.acceptUrlAuthentication({
+            instanceId,
+            elicitationId: "login-before-expiry",
+          }),
+        ),
+      ).toBe(true);
+      expect(yield* Fiber.join(beforeExpiryRequest)).toBe(true);
+      yield* Fiber.interrupt(expiringWatcher);
+
+      // Consent must be rejected at the exact expiry millisecond while the timeout has not fired.
+      clockNowMs = 0;
+      const exactExpirySeen = yield* Deferred.make<void>();
+      const exactExpiryWatcher = yield* coordinator
+        .watchUrlAuthAction(instanceId, (current) =>
+          current?.elicitationId === "login-expiring"
+            ? Deferred.succeed(exactExpirySeen, undefined).pipe(Effect.asVoid)
+            : Effect.void,
+        )
+        .pipe(Effect.forkChild);
+      const expiringRequest = yield* withDecoupledClock(
+        coordinator.requestUrlAuthentication(instanceId, {
+          ...action,
+          elicitationId: "login-expiring",
+        }),
+      ).pipe(Effect.forkChild);
+      yield* Deferred.await(exactExpirySeen);
+      clockNowMs = 10 * 60 * 1_000;
+      expect(expiringRequest.pollUnsafe()).toBeUndefined();
+      expect(
+        Option.isNone(yield* withDecoupledClock(coordinator.getUrlAuthAction(instanceId))),
+      ).toBe(true);
+      expect(expiringRequest.pollUnsafe()).toBeUndefined();
+      expect(
+        yield* withDecoupledClock(
+          coordinator.acceptUrlAuthentication({ instanceId, elicitationId: "login-expiring" }),
+        ),
+      ).toBe(false);
+      expect(yield* Fiber.join(expiringRequest)).toBe(false);
+      yield* Fiber.interrupt(exactExpiryWatcher);
+
+      // An unaccepted request also expires cleanly when the timeout fires.
+      const timeoutSeen = yield* Deferred.make<void>();
+      const timeoutWatcher = yield* coordinator
+        .watchUrlAuthAction(instanceId, (current) =>
+          current?.elicitationId === "login-timeout"
+            ? Deferred.succeed(timeoutSeen, undefined).pipe(Effect.asVoid)
+            : Effect.void,
+        )
+        .pipe(Effect.forkChild);
+      const timeoutRequest = yield* coordinator
+        .requestUrlAuthentication(instanceId, {
+          ...action,
+          elicitationId: "login-timeout",
+        })
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(timeoutSeen);
+      yield* TestClock.adjust("10 minutes");
+      expect(yield* Fiber.join(timeoutRequest)).toBe(false);
+      expect(Option.isNone(yield* coordinator.getUrlAuthAction(instanceId))).toBe(true);
+      yield* Fiber.interrupt(timeoutWatcher);
       yield* Fiber.interrupt(consumer);
     }).pipe(Effect.provide(AcpRegistryRuntimeCoordinator.layer)),
   );
@@ -256,5 +358,193 @@ describe("AcpRegistryRuntimeCoordinator", () => {
       expect(Option.isNone(yield* coordinator.getUrlAuthAction(instanceId))).toBe(true);
       yield* Fiber.interrupt(consumer);
     }).pipe(Effect.provide(AcpRegistryRuntimeCoordinator.layer)),
+  );
+
+  it.effect(
+    "isolates per-runtime state, evaluates chained clear watermarks, and drops disposed instances",
+    () =>
+      Effect.gen(function* () {
+        const coordinator = yield* AcpRegistryRuntimeCoordinator.AcpRegistryRuntimeCoordinator;
+        const instanceId = ProviderInstanceId.make("acpRegistry_runtime_scoped");
+        const metas: Array<{
+          readonly label: string;
+          readonly meta: AcpRegistryRuntimeCoordinator.AcpRegistryLiveUpdateMeta;
+        }> = [];
+        const expectedCount = { target: 0, gate: yield* Deferred.make<void>() };
+        const watcher = yield* coordinator
+          .watchAvailableCommands(instanceId, (commands, meta) =>
+            Effect.gen(function* () {
+              metas.push({ label: commands.slashCommands[0]?.name ?? "empty", meta });
+              if (metas.length >= expectedCount.target) {
+                yield* Deferred.succeed(expectedCount.gate, undefined);
+              }
+            }),
+          )
+          .pipe(Effect.forkChild);
+
+        const publishAndWait = (name: string, runtimeIdentity?: string) =>
+          Effect.gen(function* () {
+            expectedCount.target = metas.length + 1;
+            expectedCount.gate = yield* Deferred.make<void>();
+            yield* coordinator.publishAvailableCommands(
+              instanceId,
+              { slashCommands: [{ name }], skills: [] },
+              runtimeIdentity,
+            );
+            yield* Deferred.await(expectedCount.gate);
+            return metas[metas.length - 1]!.meta;
+          });
+
+        // 1. Late update from A must not evict B's stored entry.
+        const metaA = yield* publishAndWait("cmd-a", "runtime-a");
+        const metaB = yield* publishAndWait("cmd-b", "runtime-b");
+        const metaUntagged = yield* publishAndWait("cmd-untagged");
+        const metaLateA = yield* publishAndWait("cmd-a-late", "runtime-a");
+        expect(
+          yield* coordinator.getAvailableCommands(instanceId, {
+            runtimeIdentity: "runtime-b",
+            requireMatchingRuntimeIdentity: true,
+          }),
+        ).toEqual(Option.some({ slashCommands: [{ name: "cmd-b" }], skills: [] }));
+        expect(yield* metaA.isCurrent).toBe(true);
+        expect(yield* metaB.isCurrent).toBe(true);
+        expect(yield* metaUntagged.isCurrent).toBe(true);
+        expect(yield* metaLateA.isCurrent).toBe(true);
+
+        // 2. Chained preserve clears (preserve B -> preserve C -> preserve B) keep only matching entries current.
+        yield* coordinator.clearAvailableCommands(instanceId, {
+          preserveRuntimeIdentity: "runtime-b",
+        });
+        expect(yield* metaA.isCurrent).toBe(false);
+        expect(yield* metaLateA.isCurrent).toBe(false);
+        expect(yield* metaUntagged.isCurrent).toBe(false);
+        expect(yield* metaB.isCurrent).toBe(true);
+        expect(
+          yield* coordinator.getAvailableCommands(instanceId, {
+            runtimeIdentity: "runtime-a",
+            requireMatchingRuntimeIdentity: true,
+          }),
+        ).toEqual(Option.none());
+        expect(yield* coordinator.getAvailableCommands(instanceId)).toEqual(
+          Option.some({ slashCommands: [{ name: "cmd-b" }], skills: [] }),
+        );
+
+        // Even after another runtime publishes later, untagged get prefers preservedRuntimeIdentity.
+        const metaC = yield* publishAndWait("cmd-c", "runtime-c");
+        expect(yield* coordinator.getAvailableCommands(instanceId)).toEqual(
+          Option.some({ slashCommands: [{ name: "cmd-b" }], skills: [] }),
+        );
+        yield* coordinator.clearAvailableCommands(instanceId, {
+          preserveRuntimeIdentity: "runtime-c",
+        });
+        expect(yield* metaB.isCurrent).toBe(false);
+        expect(yield* metaC.isCurrent).toBe(true);
+
+        // Returning to preserve B after preserve C must NOT resurrect the older pre-C metaB.
+        const metaB2 = yield* publishAndWait("cmd-b-2", "runtime-b");
+        yield* coordinator.clearAvailableCommands(instanceId, {
+          preserveRuntimeIdentity: "runtime-b",
+        });
+        expect(yield* metaB.isCurrent).toBe(false);
+        expect(yield* metaC.isCurrent).toBe(false);
+        expect(yield* metaB2.isCurrent).toBe(true);
+
+        // 3. Full clear invalidates everything published before it; subsequent publications stay current.
+        yield* coordinator.clearAvailableCommands(instanceId);
+        expect(yield* metaB2.isCurrent).toBe(false);
+        expect(Option.isNone(yield* coordinator.getAvailableCommands(instanceId))).toBe(true);
+
+        const metaAfterFullClear = yield* publishAndWait("cmd-fresh", "runtime-b");
+        expect(yield* metaAfterFullClear.isCurrent).toBe(true);
+
+        // 4. Disposing an instance drops its state and keeps pre-disposal updates permanently stale
+        // even after the same instance ID is reused for new publications.
+        yield* coordinator.clearAvailableCommands(instanceId, { dispose: true });
+        expect(yield* metaAfterFullClear.isCurrent).toBe(false);
+        expect(Option.isNone(yield* coordinator.getAvailableCommands(instanceId))).toBe(true);
+
+        const metaAfterReuse = yield* publishAndWait("cmd-reused", "runtime-b");
+        expect(yield* metaAfterReuse.isCurrent).toBe(true);
+        expect(yield* metaAfterFullClear.isCurrent).toBe(false);
+
+        // 5. A newly subscribed watcher replays retained per-runtime entries in ascending revision
+        // order and delivers subsequent live publications without replaying older revisions.
+        yield* coordinator.publishAvailableCommands(
+          instanceId,
+          { slashCommands: [{ name: "cmd-reused-c" }], skills: [] },
+          "runtime-c",
+        );
+        const replayedNames: Array<string> = [];
+        const initialReplayDone = yield* Deferred.make<void>();
+        const replayDone = yield* Deferred.make<void>();
+        const secondWatcher = yield* coordinator
+          .watchAvailableCommands(instanceId, (commands) =>
+            Effect.gen(function* () {
+              replayedNames.push(commands.slashCommands[0]?.name ?? "empty");
+              if (replayedNames.length === 2) {
+                yield* Deferred.succeed(initialReplayDone, undefined);
+              }
+              if (replayedNames.length >= 3) {
+                yield* Deferred.succeed(replayDone, undefined);
+              }
+            }),
+          )
+          .pipe(Effect.forkChild);
+        yield* Deferred.await(initialReplayDone);
+        yield* coordinator.publishAvailableCommands(
+          instanceId,
+          { slashCommands: [{ name: "cmd-after-watch" }], skills: [] },
+          "runtime-b",
+        );
+        yield* Deferred.await(replayDone);
+        expect(replayedNames).toEqual(["cmd-reused", "cmd-reused-c", "cmd-after-watch"]);
+        yield* Fiber.interrupt(secondWatcher);
+
+        // 6. Concurrent publications for the same runtime are serialized so watchers always finish
+        // on the exact latest committed state returned by get().
+        const concurrentCount = 12;
+        const concurrentNames: Array<string> = [];
+        const concurrentReady = yield* Deferred.make<void>();
+        const concurrentDone = yield* Deferred.make<void>();
+        const concurrentWatcher = yield* coordinator
+          .watchAvailableCommands(instanceId, (commands) =>
+            Effect.gen(function* () {
+              const name = commands.slashCommands[0]?.name ?? "empty";
+              if (name === "cmd-after-watch") {
+                yield* Deferred.succeed(concurrentReady, undefined);
+              } else if (name.startsWith("concurrent-")) {
+                concurrentNames.push(name);
+                if (concurrentNames.length >= concurrentCount) {
+                  yield* Deferred.succeed(concurrentDone, undefined);
+                }
+              }
+            }),
+          )
+          .pipe(Effect.forkChild);
+        // Wait for concurrentWatcher itself to finish its initial replay before firing the batch.
+        yield* Deferred.await(concurrentReady);
+        yield* Effect.all(
+          Array.from({ length: concurrentCount }, (_, index) =>
+            coordinator.publishAvailableCommands(
+              instanceId,
+              { slashCommands: [{ name: `concurrent-${index}` }], skills: [] },
+              "runtime-b",
+            ),
+          ),
+          { concurrency: "unbounded", discard: true },
+        );
+        yield* Deferred.await(concurrentDone);
+        const committedLatest = Option.getOrThrow(
+          yield* coordinator.getAvailableCommands(instanceId, {
+            runtimeIdentity: "runtime-b",
+            requireMatchingRuntimeIdentity: true,
+          }),
+        );
+        expect(concurrentNames[concurrentNames.length - 1]).toBe(
+          committedLatest.slashCommands[0]?.name,
+        );
+        yield* Fiber.interrupt(concurrentWatcher);
+        yield* Fiber.interrupt(watcher);
+      }).pipe(Effect.provide(AcpRegistryRuntimeCoordinator.layer)),
   );
 });
