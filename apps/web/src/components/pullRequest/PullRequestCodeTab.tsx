@@ -420,6 +420,7 @@ function PullRequestCodeTab({
   fixFindingLabel: requestedFixFindingLabel,
   onFixFinding,
   onAddToChat,
+  mentionPath,
   onAddToAgentSelection,
   onRefresh,
   refreshToken = 0,
@@ -439,6 +440,7 @@ function PullRequestCodeTab({
   onFixFinding?: (finding: PullRequestFinding) => void;
   /** Absent where there is no composer beside the panel to add a conversation to. */
   onAddToChat?: (subject: PullRequestChatSubject) => void;
+  mentionPath?: (path: string) => string | null;
   onAddToAgentSelection?: (input: PullRequestAgentSelectionInput) => void;
   onRefresh: () => void;
   refreshToken?: number;
@@ -2023,6 +2025,7 @@ function PullRequestCodeTab({
               entries={fileTreeEntries}
               onSelectFile={revealFile}
               workspaceRoot={detail.workspaceRoot}
+              {...(mentionPath ? { mentionPath } : {})}
               footer={
                 nextCursor === null ? null : (
                   <div className="shrink-0 border-t border-border/60 p-2">
