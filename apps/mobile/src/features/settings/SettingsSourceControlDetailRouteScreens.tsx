@@ -24,6 +24,7 @@ import { useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { useEnvironmentsWithScope } from "../../state/session";
 import { sourceControlEnvironment } from "../../state/sourceControl";
+import { IssueAutomationSection } from "./components/IssueAutomationSection";
 import {
   IssueTrackerCredentialForm,
   IssueTrackerProjectRows,
@@ -237,6 +238,16 @@ export function SettingsIssueTrackerRouteScreen({
                 addAccount
               />
             </SettingsSection>
+          ) : null}
+          {/* Rules read statuses as the tracker's first account. */}
+          {usable &&
+          tracker.automationContainer !== undefined &&
+          route.params.accountId === undefined ? (
+            <IssueAutomationSection
+              environmentId={environmentId}
+              tracker={tracker.tracker}
+              container={tracker.automationContainer}
+            />
           ) : null}
         </>
       )}
