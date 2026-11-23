@@ -13,6 +13,7 @@ import {
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
+  RunAttemptId,
   RunId,
   ScheduledTaskError,
   ScheduledTask,
@@ -1653,4 +1654,145 @@ it.effect(
       ),
     );
   },
+);
+
+const decodeSubmitOutputFixture = Schema.decodeUnknownEffect(Schema.Struct({ ok: Schema.Boolean }));
+
+it.effect("t3_submit_output forwards caller run and attempt identity and surfaces rejection", () =>
+  Effect.gen(function* () {
+    const calls: Array<{
+      readonly threadId: ThreadId;
+      readonly json: string;
+      readonly callerRunId?: RunId | undefined;
+      readonly callerAttemptId?: RunAttemptId | undefined;
+    }> = [];
+    const runA = RunId.make("run-a");
+    const attemptA = RunAttemptId.make("attempt-a");
+    const runB = RunId.make("run-b");
+    const attemptB = RunAttemptId.make("attempt-b");
+
+    let rejectNext: { readonly problem: string; readonly cause?: unknown } | undefined;
+    const serverLayer = layerThreadToolkit.pipe(
+      Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
+      Layer.provide(NodeCrypto.layer),
+      Layer.provide(
+        Layer.mock(ThreadManagement.ThreadManagementService)({
+          getThreadShell: () => Effect.succeed(McpToolAccessTestkit.liveThreadShell(threadId)),
+          submitRunOutput: (input) => {
+            calls.push({
+              threadId: input.threadId,
+              json: input.json,
+              callerRunId: input.callerRunId,
+              callerAttemptId: input.callerAttemptId,
+            });
+            if (rejectNext !== undefined) {
+              const rejection = rejectNext;
+              rejectNext = undefined;
+              return Effect.fail(
+                new ThreadManagement.ThreadManagementRunOutputRejectedError({
+                  threadId: input.threadId,
+                  problem: rejection.problem,
+                  ...(rejection.cause === undefined ? {} : { cause: rejection.cause }),
+                }),
+              );
+            }
+            return Effect.succeed({ runId: runB });
+          },
+        }),
+      ),
+    );
+
+    const callWith = (
+      runId: RunId | undefined,
+      attemptId: RunAttemptId | undefined,
+      json: string,
+      argumentRunId?: RunId,
+    ) =>
+      Effect.gen(function* () {
+        const server = yield* McpServer.McpServer;
+        const { runId: _r, attemptId: _a, ...baseThread } = scope.thread!;
+        const args = argumentRunId === undefined ? { json } : { json, runId: argumentRunId };
+        return yield* server.callTool({ name: "t3_submit_output", arguments: args }).pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, {
+            ...scope,
+            thread: {
+              ...baseThread,
+              ...(runId === undefined ? {} : { runId }),
+              ...(attemptId === undefined ? {} : { attemptId }),
+            },
+          }),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+      });
+
+    const expectInvalidRequest = (
+      result: Effect.Success<ReturnType<typeof callWith>>,
+      message: string,
+    ) => {
+      expect(result.isError).toBe(true);
+      expect(declaredFailure(result)).toEqual({
+        _tag: "OrchestratorMcpFailure",
+        code: "invalid_request",
+        message,
+      });
+    };
+
+    const staleMessage = "This output was submitted for a turn that is no longer active.";
+    yield* Effect.gen(function* () {
+      // An unbound credential names its run in the call; service rejections surface as invalid_request.
+      rejectNext = { problem: staleMessage };
+      expectInvalidRequest(
+        yield* callWith(undefined, undefined, '{"ok":false}', runA),
+        staleMessage,
+      );
+
+      // Preserved dispatch causes stay out of MCP output; only SchemaError validation details append.
+      rejectNext = {
+        problem: staleMessage,
+        cause: new OrchestratorDispatchError({
+          commandId: CommandId.make("cmd-submit-stale"),
+          commandType: "run.output.submit",
+        }),
+      };
+      expectInvalidRequest(yield* callWith(runA, attemptA, '{"ok":false}'), staleMessage);
+
+      const schemaCause = yield* decodeSubmitOutputFixture({}).pipe(Effect.flip);
+      rejectNext = { problem: "The result does not match the schema.", cause: schemaCause };
+      expectInvalidRequest(
+        yield* callWith(runB, attemptB, "{}"),
+        `The result does not match the schema.\n${schemaCause.message.slice(0, 2000)}`,
+      );
+
+      // A bound credential outranks the argument.
+      const active = yield* callWith(runB, attemptB, '{"ok":true}', runA);
+      expect(active.isError).toBe(false);
+      expect(active.structuredContent).toEqual({ runId: runB });
+    }).pipe(Effect.provide(serverLayer));
+    expect(calls).toEqual([
+      {
+        threadId,
+        json: '{"ok":false}',
+        callerRunId: runA,
+        callerAttemptId: undefined,
+      },
+      {
+        threadId,
+        json: '{"ok":false}',
+        callerRunId: runA,
+        callerAttemptId: attemptA,
+      },
+      {
+        threadId,
+        json: "{}",
+        callerRunId: runB,
+        callerAttemptId: attemptB,
+      },
+      {
+        threadId,
+        json: '{"ok":true}',
+        callerRunId: runB,
+        callerAttemptId: attemptB,
+      },
+    ]);
+  }),
 );

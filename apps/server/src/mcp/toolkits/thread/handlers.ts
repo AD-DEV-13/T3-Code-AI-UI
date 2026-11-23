@@ -8,6 +8,7 @@ import {
   type OrchestrationV2Command,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import { modelSelectionCommandType } from "@t3tools/shared/model";
 import { topOfPinnedRunOrderKey } from "@t3tools/shared/pinOrderKey";
 
@@ -287,11 +288,17 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
     Effect.gen(function* () {
       const { scope, threads } = yield* readCaller();
       if (scope.thread === undefined) return yield* unavailable();
+      // A credential bound to its run outranks the argument; an unbound one has only the argument.
+      const callerRunId = scope.thread.runId ?? input.runId;
       return yield* threads
         .submitRunOutput({
           threadId: scope.thread.threadId,
           commandId: yield* newCommandId(),
           json: input.json,
+          ...(callerRunId === undefined ? {} : { callerRunId }),
+          ...(scope.thread.attemptId === undefined
+            ? {}
+            : { callerAttemptId: scope.thread.attemptId }),
         })
         .pipe(
           Effect.mapError((error) =>
@@ -299,10 +306,9 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
               ? new OrchestratorMcpFailure({
                   code: "invalid_request",
                   // The agent wrote the value, so it is told what in it did not fit.
-                  message:
-                    error.cause instanceof Error
-                      ? `${error.message}\n${error.cause.message.slice(0, 2000)}`
-                      : error.message,
+                  message: Schema.isSchemaError(error.cause)
+                    ? `${error.message}\n${error.cause.message.slice(0, 2000)}`
+                    : error.message,
                 })
               : unavailable(),
           ),

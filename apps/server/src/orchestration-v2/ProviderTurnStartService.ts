@@ -66,8 +66,9 @@ import {
   isSlashCommandMessage,
   withInlineContext,
 } from "./ContextHandoffDelivery.ts";
-import { isProviderCommand, outputInstructions } from "./runOutput.ts";
+import { isProviderCommand, outputInstructions, resolveOwedOutputRun } from "./runOutput.ts";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
+import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import { unsentManualContinuationSource } from "@t3tools/shared/orchestrationV2ManualContinuation";
@@ -156,6 +157,7 @@ const PROMPT_REFUSAL_TAGS = [
   "ClaudeAppendSystemPromptMissingValueError",
   "ClaudeSettingsLaunchArgError",
   "ClaudeMcpRegistrationTimeoutError",
+  "ProviderAdapterMcpRotationBlockedError",
 ] as const;
 
 const refusedBeforePrompt = (error: unknown): boolean =>
@@ -300,6 +302,7 @@ export const layer: Layer.Layer<
     const projects = yield* ProjectService.ProjectService;
     const providerAuth = yield* ProviderAuthService.ProviderAuthService;
     const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
+    const mcpSessions = yield* Effect.serviceOption(McpProviderSessions.McpProviderSessions);
     const providerSessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
     const runExecution = yield* RunExecutionService.RunExecutionServiceV2;
     const runtimePolicy = yield* RuntimePolicy.RuntimePolicyV2;
@@ -964,12 +967,21 @@ export const layer: Layer.Layer<
         brokenNativeThread &&
         providerThread.nativeThreadRef !== null &&
         !(yield* providerSessions.isLive(providerSessionId));
+      const owedOutputRun = yield* resolveOwedOutputRun(projection.runs, () =>
+        projectionStore.getThreadRecords(input.threadId, ["runs", "turnItems"], {
+          turnItemTypes: ["user_message"],
+        }),
+      );
       const sessionResult = yield* Effect.result(
         providerSessions.open({
           threadId: projection.thread.id,
           providerSessionId,
           modelSelection: run.modelSelection,
           runtimePolicy: resolvedRuntimePolicy,
+          runId: run.id,
+          attemptId: attempt.id,
+          requireRunScopedMcp: run.outputSchema !== undefined,
+          ...(owedOutputRun === undefined ? {} : { owedOutputRunId: owedOutputRun.id }),
           ...(existingSessionProjection === undefined
             ? {}
             : { resumeFromSession: existingSessionProjection }),
@@ -1031,10 +1043,11 @@ export const layer: Layer.Layer<
         session.providerSession.capabilities.turns.supportsNativeGoals === true;
       const goalCommand = goalDriver && parseGoalCommand(providerMessage) !== null;
       // Part of the user text, so every way a turn starts carries it, after the user's own words.
-      const userText =
+      const outputNote =
         run.outputSchema === undefined || goalCommand || isProviderCommand(providerMessage)
-          ? messageText
-          : `${messageText}\n\n${outputInstructions(run.outputSchema)}`;
+          ? ""
+          : outputInstructions(run.outputSchema, run.id);
+      const userText = [messageText, outputNote].filter((part) => part !== "").join("\n\n");
       // The provider turn marks cancellation work delivered; restart continuations use their own text or resume natively.
       const noteContinuation = isRestartNoteContinuation(
         run,
@@ -1727,11 +1740,12 @@ export const layer: Layer.Layer<
         resumedHandoffContext = undefined;
         resumedRetryHandoff = undefined;
         if (!(yield* isCurrentAttemptInStatus("starting"))) return undefined;
-        // Another client is still writing to the native thread, or the provider may have
-        // resumed it without answering. A fresh session would split the conversation.
+        // Another client or active background work owns the native thread, or the provider may
+        // have resumed it without answering. A fresh session would split the conversation.
         if (
           resumed._tag === "Failure" &&
           (resumed.failure._tag === "ProviderAdapterThreadInUseError" ||
+            resumed.failure._tag === "ProviderAdapterMcpRotationBlockedError" ||
             outcomeUnknown(resumed.failure))
         ) {
           return yield* loadFromProvider(Effect.fail(resumed.failure));
@@ -1927,6 +1941,17 @@ export const layer: Layer.Layer<
         });
         return;
       }
+      const needsOutputRunIdCheck =
+        outputNote !== "" &&
+        ((manualResume && unsentResumeMessage === undefined) ||
+          (run.restartContinuationOfRunId !== undefined && !noteContinuation));
+      const mcpSession =
+        needsOutputRunIdCheck && Option.isSome(mcpSessions)
+          ? yield* mcpSessions.value.read(projection.thread.id)
+          : undefined;
+      // An unbound MCP credential cannot supply run.id, so a typed continuation must prompt with it.
+      const needsPromptedOutputRunId =
+        needsOutputRunIdCheck && mcpSession !== undefined && mcpSession.runId !== run.id;
       const runningProviderThread: OrchestrationV2ProviderThread = {
         ...loadedProviderThread,
         contextUsage: handoffUsage,
@@ -2139,7 +2164,8 @@ export const layer: Layer.Layer<
             .filter((part) => part !== "")
             .join("\n\n");
           const { restartContinuationOfRunId: _resumedRunId, ...promptedInput } = turnInput;
-          const startInput = noteContinuation ? promptedInput : turnInput;
+          const startInput =
+            noteContinuation || needsPromptedOutputRunId ? promptedInput : turnInput;
           const { resume: _resume, ...contextInput } = startInput;
           const { message: resumeMessage, resume: _resumeIntent, ...resumeInput } = startInput;
           const missedAttachments =
@@ -2150,10 +2176,15 @@ export const layer: Layer.Layer<
                     !turnInput.message.attachments.some((current) => current.id === missed.id),
                 );
           // Like pending history, pending images need a prompt; native resume carries none.
-          const prompted = context !== "" || missedAttachments.length > 0;
+          const prompted =
+            context !== "" || missedAttachments.length > 0 || needsPromptedOutputRunId;
           // A resume that must be prompted still needs a request, or the agent has nothing to do.
           const requestText =
-            turnInput.resume && prompted && userText === "" ? RESUME_PROMPT : userText;
+            turnInput.resume && prompted && messageText === ""
+              ? outputNote === ""
+                ? RESUME_PROMPT
+                : `${RESUME_PROMPT}\n\n${outputNote}`
+              : userText;
           const text = slashCommand ? userText : withInlineContext(context, requestText);
           const operation =
             turnInput.resume && !prompted
@@ -2173,9 +2204,9 @@ export const layer: Layer.Layer<
                       ? {}
                       : { attachments: [...missedAttachments, ...turnInput.message.attachments] }),
                   },
-                  ...(text === userText
+                  ...(text === requestText
                     ? {}
-                    : { inlineContextLength: text.length - userText.length }),
+                    : { inlineContextLength: text.length - requestText.length }),
                 });
           yield* operation.pipe(
             // Clear pending handoff markers for refused prompts so the next turn retains the native session.
@@ -2238,9 +2269,10 @@ export const layer: Layer.Layer<
               }),
         ),
       );
-      const deliverySession = carriesPendingContext
-        ? makeDeliverySession(session, startWithHandoffs)
-        : session;
+      const deliverySession =
+        carriesPendingContext || needsPromptedOutputRunId
+          ? makeDeliverySession(session, startWithHandoffs)
+          : session;
       return runExecution.startRootRun({
         commandId: CommandId.make(`command:effect:provider-turn.start:${run.id}`),
         appThread: projection.thread,
