@@ -2022,6 +2022,7 @@ function PullRequestCodeTab({
               )}
               entries={fileTreeEntries}
               onSelectFile={revealFile}
+              workspaceRoot={detail.workspaceRoot}
               footer={
                 nextCursor === null ? null : (
                   <div className="shrink-0 border-t border-border/60 p-2">
