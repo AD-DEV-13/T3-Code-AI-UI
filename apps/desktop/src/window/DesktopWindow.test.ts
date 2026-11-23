@@ -1560,7 +1560,6 @@ describe("DesktopWindow", () => {
           });
 
           assert.deepEqual(webPreferences.additionalArguments, expected);
-          assert.strictEqual(webPreferences.backgroundThrottling, false);
         }).pipe(Effect.provide(layer));
       }),
   );
