@@ -32,6 +32,7 @@ import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as BrowserSession from "./BrowserSession.ts";
 import * as DesktopBrowserHost from "./DesktopBrowserHost.ts";
 import * as PreviewManager from "./Manager.ts";
+import { sendPageCommand } from "./GuestInput.ts";
 import * as PreviewPasskeys from "./Passkeys.ts";
 
 describe("fitPictureInPictureContentSize", () => {
@@ -112,6 +113,30 @@ describe("previewWindowOpenAction", () => {
     ]) {
       expect(PreviewManager.previewWindowOpenAction(details({ url }))).toBe("navigate");
     }
+  });
+
+  it("hands thread links to the app in every disposition", () => {
+    for (const disposition of [
+      "new-window",
+      "foreground-tab",
+      "background-tab",
+      "other",
+    ] as const) {
+      expect(
+        PreviewManager.previewWindowOpenAction(
+          details({ url: "t3-thread://v2/env-1/thread-1", disposition }),
+        ),
+      ).toBe("open-in-app");
+    }
+    // A hosted thread link is a web page; the preview may be testing that very app.
+    expect(
+      PreviewManager.previewWindowOpenAction(
+        details({
+          url: "https://app.t3.codes/threads/env-1/thread-1",
+          disposition: "foreground-tab",
+        }),
+      ),
+    ).toBe("new-tab");
   });
 
   it("denies local and inline schemes that no page could open in place itself", () => {
@@ -2573,6 +2598,90 @@ describe("PreviewManager", () => {
         // A person clicking in the guest itself gives it a focused frame.
         Object.assign(contents, { focusedFrame: {} });
         expect(yield* openBlankLink).toBe(false);
+      }).pipe(Effect.provide(managerLayer()), Effect.scoped),
+  );
+
+  effectIt.effect(
+    "hands a thread link to the app instead of the OS, however the page opens it",
+    () =>
+      Effect.gen(function* () {
+        const host = yield* DesktopBrowserHost.DesktopBrowserHost;
+        const serverTab = { threadId: "thread-1", tabId: "server-tab-1" };
+        const contents = Object.assign(
+          makeTestPreviewWebContents(async () => {
+            throw new Error("unused");
+          }, 42),
+          { isDevToolsOpened: () => false, getUserAgent: () => "Electron", focusedFrame: {} },
+        );
+        fromId.mockReturnValue(contents);
+        const manager = yield* PreviewManager.PreviewManager;
+        const openLinks = yield* Queue.unbounded<string>();
+        yield* manager.subscribeOpenLinks(({ url }) =>
+          Queue.offer(openLinks, url).pipe(Effect.asVoid),
+        );
+        const attached = yield* Deferred.make<void>();
+        yield* host.events.pipe(
+          Stream.runForEach((line) =>
+            new TextDecoder().decode(line).includes('"type":"attached"')
+              ? Deferred.succeed(attached, undefined)
+              : Effect.void,
+          ),
+          Effect.forkScoped,
+        );
+        yield* manager.createTab("tab_1", { serverTab });
+        yield* manager.registerWebview("tab_1", 42);
+        yield* Deferred.await(attached);
+        const threadLink = "t3-thread://v2/env-1/thread-1";
+        const listener = (name: string) =>
+          (vi.mocked(contents.on).mock.calls as ReadonlyArray<ReadonlyArray<unknown>>).find(
+            ([event]) => event === name,
+          )?.[1] as ((...args: ReadonlyArray<unknown>) => void) | undefined;
+        const click = () => listener("input-event")?.({}, { type: "mouseDown" });
+        const openWindow = vi.mocked(contents.setWindowOpenHandler).mock.calls[0]![0];
+        const willNavigate = listener("will-frame-navigate");
+        const navigation = (url: string) => ({ url, preventDefault: vi.fn() });
+
+        // A page cannot change the user's chat on its own.
+        expect(
+          openWindow({ url: threadLink, disposition: "foreground-tab" } as Electron.HandlerDetails),
+        ).toEqual({ action: "deny" });
+        const unprompted = navigation(threadLink);
+        willNavigate?.(unprompted);
+        expect(unprompted.preventDefault).toHaveBeenCalled();
+        expect(yield* Queue.size(openLinks)).toBe(0);
+
+        // Nor can an agent driving the page: its input is not the user's.
+        yield* Effect.promise(() =>
+          sendPageCommand(
+            contents,
+            { sendCommand: async () => click() } as unknown as Electron.Debugger,
+            "Input.dispatchMouseEvent",
+            { type: "mousePressed", x: 1, y: 1 },
+          ),
+        );
+        willNavigate?.(navigation(threadLink));
+        expect(yield* Queue.size(openLinks)).toBe(0);
+
+        click();
+        expect(
+          openWindow({ url: threadLink, disposition: "foreground-tab" } as Electron.HandlerDetails),
+        ).toEqual({ action: "deny" });
+        expect(yield* Queue.take(openLinks)).toBe(threadLink);
+        const toThread = navigation(threadLink);
+        willNavigate?.(toThread);
+        expect(toThread.preventDefault).toHaveBeenCalled();
+        expect(yield* Queue.take(openLinks)).toBe(threadLink);
+
+        // As with Chromium's own user activation, the input counts for five seconds.
+        yield* TestClock.adjust(5_001);
+        willNavigate?.(navigation(threadLink));
+        expect(yield* Queue.size(openLinks)).toBe(0);
+
+        // Every other app link stays with Chromium, which asks the session before the OS opens it.
+        const toApp = navigation("obsidian://open?vault=v&file=A");
+        willNavigate?.(toApp);
+        expect(toApp.preventDefault).not.toHaveBeenCalled();
+        expect(yield* Queue.size(openLinks)).toBe(0);
       }).pipe(Effect.provide(managerLayer()), Effect.scoped),
   );
 

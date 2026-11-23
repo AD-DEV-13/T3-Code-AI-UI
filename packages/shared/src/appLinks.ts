@@ -1,5 +1,5 @@
 /** Schemes the browser engine loads itself; every other scheme names an app the OS opens. */
-const BROWSER_PROTOCOLS = [
+export const BROWSER_PROTOCOLS: ReadonlyArray<string> = [
   "about:",
   "blob:",
   "chrome:",
