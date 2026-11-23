@@ -54,6 +54,22 @@ async function loadHooks(
 }
 
 describe("Pi orchestration prompt section", () => {
+  it("isolates visual overrides between Pi processes sharing an extension file", async () => {
+    const first = await loadMcpBridge({
+      orchestrationInstructions: "Publish with the report skill.",
+    });
+    const second = await loadMcpBridge({ orchestrationInstructions: "Render inside the chat." });
+    const event = { systemPrompt: "base" };
+    const ctx = { ui: { notify: assert.fail } };
+    assert.equal(
+      (await first.handlers.get("before_agent_start")!(event, ctx))?.systemPrompt,
+      `base\n\nPublish with the report skill.\n\n${PULL_REQUEST_LINKING_INSTRUCTIONS}`,
+    );
+    assert.equal(
+      (await second.handlers.get("before_agent_start")!(event, ctx))?.systemPrompt,
+      `base\n\nRender inside the chat.\n\n${PULL_REQUEST_LINKING_INSTRUCTIONS}`,
+    );
+  });
   it.each([
     {
       name: "on Pi builds without prompt sections",

@@ -224,7 +224,7 @@ import {
 import type { ManagedServerProvider } from "@t3tools/provider-core/server/snapshot";
 import {
   T3_CODE_DEVICE_TOOL_INSTRUCTIONS_WITH_TOOL_SEARCH,
-  T3_CODE_ORCHESTRATION_INSTRUCTIONS,
+  t3OrchestrationInstructions,
 } from "@t3tools/provider-core/server/orchestrationInstructions";
 import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
 import {
@@ -2421,6 +2421,7 @@ export function makeClaudeQueryOptions(input: {
   readonly workspace?: ProviderAdapter.ProviderAdapterV2RuntimePolicy["workspace"];
   readonly attachmentsDir?: string;
   readonly settings?: ClaudeSettings;
+  readonly visualInstructions?: string | null;
   readonly promptSuggestions?: boolean;
   readonly sdkSettings?: string | ClaudeSdkSettings;
   readonly environment?: NodeJS.ProcessEnv;
@@ -2592,7 +2593,7 @@ export function makeClaudeQueryOptions(input: {
         }) +
           (input.mcpServers === undefined
             ? ""
-            : T3_CODE_ORCHESTRATION_INSTRUCTIONS +
+            : t3OrchestrationInstructions(input.visualInstructions) +
               CLAUDE_BACKGROUND_WAIT_INSTRUCTIONS +
               CLAUDE_SEND_TO_USER_INSTRUCTIONS +
               (deviceInstructions
@@ -13416,6 +13417,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
             ],
             { concurrency: "unbounded" },
           );
+          const visualInstructions = Option.isSome(serverSettings)
+            ? (yield* serverSettings.value.getSettings).visualInstructions
+            : null;
           const closedExistingNativeThreadId = existing !== null ? existing.nativeThreadId : null;
           clearedNativeSessions.delete(nativeThreadId);
           if (existing !== null) {
@@ -13436,6 +13440,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           const shouldResume =
             resumeSessionAt !== undefined || openedWithResume || hasPersistedProviderTurn;
           const queryOptions = makeClaudeQueryOptions({
+            visualInstructions,
             agentFeedback: turnInput.agentFeedback ?? "off",
             modelSelection: turnInput.modelSelection,
             modelCatalog: catalog,

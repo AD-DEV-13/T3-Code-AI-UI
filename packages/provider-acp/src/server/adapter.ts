@@ -9141,6 +9141,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             messageText,
             turnInput.message.attachments,
           );
+          const visualInstructions = (yield* host.settings.get).visualInstructions;
           // Read delivery state after the awaits above, so a compaction that lands
           // while the prompt is prepared still resends the notes in this prompt.
           const previousInstructionState = (yield* Ref.get(promptInstructionStates)).get(sessionId);
@@ -9152,6 +9153,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             isNativeSlashCommand,
           );
           const text = t3AcpPromptWithInstructions({
+            visualInstructions,
             prompt: messageText,
             state: instructionState,
             ...(previousInstructionState === undefined || compactionMarker !== undefined

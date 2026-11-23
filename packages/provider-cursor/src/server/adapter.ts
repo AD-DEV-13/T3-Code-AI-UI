@@ -2866,6 +2866,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             return { message: "/compress", prompt: undefined, runtimeInstructions: undefined };
           }
           const newText = t3OrchestrationPrompt({
+            visualInstructions: (yield* host.settings.get).visualInstructions,
             prompt: yield* providerMessageTextWithAttachmentPaths({
               text: yield* resolveCursorSkillText(
                 rawText,
@@ -3293,6 +3294,13 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                 threadId: threadInput.threadId,
                 modelSelection: threadInput.modelSelection,
                 runtimePolicy: threadInput.runtimePolicy,
+              });
+              yield* Ref.set(told, {
+                agent: opened.nativeThreadId,
+                orchestration: false,
+                device: false,
+                backgroundWait: false,
+                runtime: undefined,
               });
               const now = yield* DateTime.now;
               return makeProviderThread({

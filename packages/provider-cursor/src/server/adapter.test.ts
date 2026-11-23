@@ -6,6 +6,7 @@ import { assert, describe, it } from "@effect/vitest";
 import type { InteractionUpdate } from "@cursor/sdk";
 import { toolOutputImages } from "@t3tools/shared/toolOutput";
 import {
+  DEFAULT_SERVER_SETTINGS,
   CheckpointId,
   EnvironmentId,
   MessageId,
@@ -952,6 +953,7 @@ describe("CursorAdapterV2", () => {
       const fileSystem = yield* FileSystem.FileSystem;
       const workspace = yield* fileSystem.makeTempDirectoryScoped({ prefix: "cursor-v2-device-" });
       const sentMessages: Array<string> = [];
+      const visualInstructions = "Use my publishing skill for standalone reports.";
       const rewoundAfter: Array<string> = [];
       let rewindFails = false;
       let nextRunStatus: "finished" | "error" = "finished";
@@ -1033,14 +1035,20 @@ describe("CursorAdapterV2", () => {
             });
           },
         }),
-        Effect.provide(TestProviderHost.layer({ cwd: workspace })),
+        Effect.provide(
+          TestProviderHost.layer({
+            cwd: workspace,
+            settings: { ...DEFAULT_SERVER_SETTINGS, visualInstructions },
+          }),
+        ),
       );
-      const runtime = yield* adapter.openSession({
+      const sessionInput = {
         threadId,
         providerSessionId: ProviderSessionId.make("cursor-device-session"),
         modelSelection,
         runtimePolicy,
-      });
+      };
+      let runtime = yield* adapter.openSession(sessionInput);
       let providerThread = yield* runtime.ensureThread({
         threadId,
         modelSelection,
@@ -1070,7 +1078,7 @@ describe("CursorAdapterV2", () => {
         lastVisitedAt: null,
         deletedAt: null,
       };
-      // Starts at run 5: a conversation from before device instructions existed, now resumed.
+      // Recovery can create a new native agent after earlier app turns.
       let runOrdinal = 4;
       let lastProviderTurn: OrchestrationV2ProviderTurn | undefined;
       const send = Effect.fnUntraced(function* (
@@ -1129,8 +1137,17 @@ describe("CursorAdapterV2", () => {
       });
 
       yield* setDeviceAccess(true);
-      assert.deepEqual(yield* send(), told(false, true, true));
+      assert.deepEqual(yield* send(), told(true, true, true));
+      assert.include(sentMessages.at(-1)!, visualInstructions);
       assert.deepEqual(yield* send(), told(false, false, false));
+      runtime = yield* adapter.openSession(sessionInput);
+      yield* runtime.resumeThread({ providerThread });
+      assert.deepEqual(
+        yield* send(),
+        told(false, true, true),
+        "an existing agent stays told after restart",
+      );
+      assert.notInclude(sentMessages.at(-1)!, visualInstructions);
       yield* send(true);
       assert.deepEqual(
         yield* send(),
