@@ -305,6 +305,7 @@ export const AntigravityDriver: ProviderDriver<
           profile,
           cwd,
           baseEnv,
+          autoCompactWindow: settings.autoCompactWindow,
           auth,
           runtimeTempDirectory,
         }),
