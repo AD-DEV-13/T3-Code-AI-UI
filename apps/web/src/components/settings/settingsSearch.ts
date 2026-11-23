@@ -598,6 +598,7 @@ export const SETTINGS_SEARCH_ITEMS = [
       msg(
         "send microphone audio dictation destination speech voice stt transcription environment machine consent privacy cloud OpenAI Grok OpenRouter",
       ),
+      "Deepgram",
     ],
   },
   {

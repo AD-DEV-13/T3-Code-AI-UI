@@ -7943,14 +7943,20 @@
     ", um fortzufahren."
   ],
   "1d33877ef8ea3559": "Laden des API-Schlüssels wiederholen",
-  "be805c1729dc0726": [
+  "2b5b356019c6857b": [
     "Aktualisiere ",
     {
       "i": 1,
       "k": "_gt_value_1",
       "v": "v"
     },
-    ", um OpenRouter-Diktat zu nutzen."
+    ", um ",
+    {
+      "i": 2,
+      "k": "_gt_value_2",
+      "v": "v"
+    },
+    "-Diktat zu nutzen."
   ],
   "d7acad5dde4c1d1b": "Es wird nach einem API-Schlüssel gesucht…",
   "8257030da7a4ad4e": "Modell",

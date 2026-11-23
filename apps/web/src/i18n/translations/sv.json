@@ -7948,14 +7948,20 @@
     " med dikteringsåtkomst för att fortsätta."
   ],
   "1d33877ef8ea3559": "Försök läsa in API-nyckeln igen",
-  "be805c1729dc0726": [
+  "2b5b356019c6857b": [
     "Uppdatera ",
     {
       "i": 1,
       "k": "_gt_value_1",
       "v": "v"
     },
-    " för att använda diktering med OpenRouter."
+    " för att använda diktering med ",
+    {
+      "i": 2,
+      "k": "_gt_value_2",
+      "v": "v"
+    },
+    "."
   ],
   "d7acad5dde4c1d1b": "Söker efter en API-nyckel…",
   "8257030da7a4ad4e": "Modell",

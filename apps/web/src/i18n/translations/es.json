@@ -7942,14 +7942,20 @@
     " con acceso al dictado para continuar."
   ],
   "1d33877ef8ea3559": "Reintentar la carga de la clave de API",
-  "be805c1729dc0726": [
+  "2b5b356019c6857b": [
     "Actualiza ",
     {
       "i": 1,
       "k": "_gt_value_1",
       "v": "v"
     },
-    " para usar el dictado con OpenRouter."
+    " para usar el dictado de ",
+    {
+      "i": 2,
+      "k": "_gt_value_2",
+      "v": "v"
+    },
+    "."
   ],
   "d7acad5dde4c1d1b": "Buscando una clave de API…",
   "8257030da7a4ad4e": "Modelo",
