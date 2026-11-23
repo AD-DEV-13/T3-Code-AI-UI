@@ -1048,6 +1048,7 @@ interface CursorLiveAgent {
 export interface CursorAdapterV2Options {
   readonly instanceId: ProviderInstanceId;
   readonly environment: NodeJS.ProcessEnv;
+  readonly fileLinkInstructions?: string | undefined;
   readonly getModels?: () => ReadonlyArray<ServerProviderModel>;
   readonly getSdkModels?: () => ReadonlyArray<SDKModel>;
 }
@@ -2925,6 +2926,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             agentFeedback: mcpServers === undefined ? "off" : (turnInput.agentFeedback ?? "off"),
             harness: "Cursor",
             model: turnInput.modelSelection.model,
+            fileLinkInstructions: adapterOptions.fileLinkInstructions,
             runtimePolicy: turnInput.runtimePolicy,
           });
           // Resend only on a new/compacted/rewound conversation or when the instructions change.

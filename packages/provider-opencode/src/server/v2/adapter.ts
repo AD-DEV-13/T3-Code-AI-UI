@@ -823,7 +823,10 @@ const turnTokenUsage = (turn: ActiveTurn, status: OrchestrationV2ProviderTurn["s
       };
 };
 
-export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: ProviderInstanceId) {
+export const make = Effect.fn("OpenCode2Adapter.make")(function* (
+  instanceId: ProviderInstanceId,
+  fileLinkInstructions?: string | undefined,
+) {
   const server = yield* OpenCode2Server.OpenCode2Server;
   const idAllocator = yield* IdAllocator.IdAllocatorV2;
   const host = yield* ProviderHost.ProviderHost;
@@ -4423,6 +4426,7 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           agentFeedback: mcpAvailable ? (turnInput.agentFeedback ?? "off") : "off",
           harness: "OpenCode",
           model: turnInput.modelSelection.model,
+          fileLinkInstructions,
           runtimePolicy: turnInput.runtimePolicy,
         }),
         t3OrchestrationSystemPrompt(mcpAvailable, mcpSession?.capabilities?.has("device") === true),

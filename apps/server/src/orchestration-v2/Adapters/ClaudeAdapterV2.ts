@@ -2587,6 +2587,7 @@ export function makeClaudeQueryOptions(input: {
       append: [
         buildRuntimeInstructions({
           harness: "Claude Code",
+          fileLinkInstructions: input.settings?.fileLinkInstructions,
           agentFeedback,
           runtimePolicy: { cwd: input.cwd, workspace: input.workspace },
         }) +
