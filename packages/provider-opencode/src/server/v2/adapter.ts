@@ -74,7 +74,7 @@ import { HTML_RENDER_TOOL_NAME } from "@t3tools/shared/htmlRender";
 import { htmlRenderFromToolItem } from "@t3tools/shared/toolOutput";
 import { compareSemverVersions } from "@t3tools/shared/semver";
 import * as KeyedLock from "@t3tools/shared/KeyedLock";
-import { modelSelectionsEqual } from "@t3tools/shared/model";
+import { getModelSelectionStringOptionValue, modelSelectionsEqual } from "@t3tools/shared/model";
 import { causeErrorTag } from "@t3tools/shared/observability";
 
 import {
@@ -782,8 +782,12 @@ const sameModel = (left: ModelRef, right: ModelRef | undefined) =>
   left.id === right?.id &&
   (left.variant ?? "default") === (right?.variant ?? "default");
 
+// Plan mode owns the agent while it is on; otherwise the composer's choice wins and `build` is
+// the fallback. The picker never stores `plan`, so a stale value cannot override the toggle.
 const agentFor = (input: ProviderAdapter.ProviderAdapterV2TurnInput) =>
-  input.runtimePolicy.interactionMode === "plan" ? "plan" : "build";
+  input.runtimePolicy.interactionMode === "plan"
+    ? "plan"
+    : (getModelSelectionStringOptionValue(input.modelSelection, "agent") ?? "build");
 
 const commandOf = (text: string) => {
   const match = /^\/(\S+)(?:\s+([\s\S]*))?$/.exec(text.trim());
