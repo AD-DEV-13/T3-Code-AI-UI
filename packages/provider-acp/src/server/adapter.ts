@@ -7816,6 +7816,16 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           return mcpBridge;
         });
 
+        const trackRunningAgent = Effect.fn("AcpAdapterV2.trackRunningAgent")(function* (
+          scope: Scope.Scope,
+        ) {
+          const trackAgent = host.trackAgent;
+          if (trackAgent === undefined) return;
+          yield* Effect.acquireRelease(Effect.sync(trackAgent), (release) =>
+            Effect.sync(release),
+          ).pipe(Effect.provideService(Scope.Scope, scope));
+        });
+
         const spawnAcpRuntime = Effect.fnUntraced(function* (
           threadId: ThreadId | null,
           resumeSessionId?: string,
@@ -7824,6 +7834,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             yield* Scope.close(runtimeScope, Exit.void);
           }
           runtimeScope = yield* Scope.make();
+          // Let port discovery scan dev servers while this agent runs.
+          yield* trackRunningAgent(runtimeScope);
           const mcpContext = yield* readMcpContext(threadId);
           runtimeMcpBridge = yield* makeRuntimeMcpBridge(mcpContext, runtimeScope);
           const runtimeGeneration = yield* Ref.get(runtimeCallbackGeneration);
@@ -7904,6 +7916,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             });
           let replacementMcpBridge: AcpMcpOverAcpBridge | undefined;
           const startup = Effect.gen(function* () {
+            yield* trackRunningAgent(replacementScope);
             const mcpContext = yield* readMcpContext(threadId);
             replacementMcpBridge = yield* makeRuntimeMcpBridge(mcpContext, replacementScope);
             const replacementRuntime = yield* flavor
