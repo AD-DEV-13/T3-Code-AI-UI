@@ -1277,9 +1277,9 @@
   "90adc194b2b0dd10": "Manifest licencji open-source ma nieobsługiwany format.",
   "38444760dd2d533d": "Manifest licencji open-source zawiera duplikat wpisu: {key}",
   "3b343f492b261db1": "Zasoby",
-  "f6445a8627bd1674": "Desktop",
+  "f6445a8627bd1674": "Pulpit",
   "473e894125a6ac11": "Narzędzia urządzeń",
-  "253dba75f81779d6": "Mobile",
+  "253dba75f81779d6": "Mobilne",
   "2416e6e5fb5efe36": "Serwer",
   "9200c1b85dc2eb60": "Web",
   "0ced5c7ac38d9a3e": "Wątek jest już niedostępny",
@@ -1413,8 +1413,8 @@
   "8d2db5f3cbba9bba": "Iskry",
   "0ee25cbdfbc261f9": "Błyskawica",
   "a29b52836275e0b3": "Web",
-  "7c753f0fc2d20df5": "Mobile",
-  "cd9de72179a44b14": "Desktop",
+  "7c753f0fc2d20df5": "Mobilne",
+  "cd9de72179a44b14": "Pulpit",
   "5528dbe8cc03a81e": "Klawiatura",
   "d1bb8c2e10be9f33": "Zębatka",
   "df2a2fac8743b437": "Baza danych",
@@ -7039,7 +7039,7 @@
   "7cd7da2abec6141e": "Zamknij natychmiast albo przeciągnij po wierszach, aby zamknąć kilka",
   "bb0614eb361e525d": "Może być nieaktualne",
   "f1152662c2b89b0d": [
-    "Stack #",
+    "Stos #",
     {
       "i": 1,
       "k": "_gt_value_1",
@@ -7181,7 +7181,7 @@
     {
       "t": "span",
       "i": 2,
-      "c": "reviewed"
+      "c": "przejrzał"
     }
   ],
   "4affc3da49f673c2": [
@@ -7194,7 +7194,7 @@
     {
       "t": "span",
       "i": 2,
-      "c": "commented"
+      "c": "skomentował"
     }
   ],
   "04ea50285b00dcdd": "Przegląd",
@@ -7907,63 +7907,63 @@
   ],
   "d0e747ae0c4f68a5": "Nie udało się zainstalować t3",
   "ba3ac338f36cba74": "Nie udało się usunąć t3",
-  "9c942b53b58119b8": "Could not add t3 to PATH",
-  "dbd9a279df913da0": "Another t3 at {path} runs first in a new terminal. Remove it to use T3 Code's.",
-  "20a48e388fd71c1d": "Run T3 Code's CLI as `t3` from any terminal.",
-  "4f6e93011ef2da6f": "Installed at {path}. Open a new terminal to use it.",
-  "371ca438cf467125": "Installed at {path} and added to PATH in {file}. Open a new terminal to use it.",
-  "fd3eece9d1a7ea38": "Installed at {path}, which is not on your PATH yet.",
-  "5fff98fa978bd008": "Installed at {path}, which is not on your PATH yet. Add its folder to your PATH to run `t3`.",
-  "dc06294dd4078b00": "Remove",
-  "b707d919dbf0222a": "Install",
-  "9a284b5893dc04a2": "OpenRouter model",
-  "c8361c16c47d5fb5": "Search transcription models",
-  "d72eccdd92d4f989": "Couldn’t save this change. Check your connection and try again.",
-  "ef5fef499da688e8": "Replace API key",
-  "cad38c8893ab98e4": "API key",
-  "42ec8bbd6819af00": "{company} API key",
-  "03d751a890780a70": "{company} API key reference",
-  "2db595fcf95d3ff6": "Enter API key",
-  "7aa0d5470ed46175": "Enter an API key, not a URL or secret reference.",
-  "dad7aceef19f0f5b": "Updating the key keeps dictation enabled.",
-  "015e394f14d5ede0": "Leave blank to keep the saved key.",
-  "0a9e4d44c145cd07": "Anyone with dictation access to {environment} can bill this key.",
-  "55803224ee096dc0": "Remove the {company} key?",
-  "0a7813c7df04ffe9": "Manage OpenRouter dictation",
-  "9996968084688efe": "Manage {company} key",
-  "bf6a4f30c36e0a87": "Use {name} for dictation?",
-  "710bec893f7881d1": "Everyone using {name} for dictation on {environment} will lose access.",
-  "f6737abf6f99aeac": "Anyone with dictation access to {environment} can use this API key.",
-  "ae3375e7f2d10df7": "Save and enable",
-  "d07f8134999c97ea": "Save key",
-  "a2f4d7c36423bbe5": "No transcription model matches.",
+  "9c942b53b58119b8": "Nie udało się dodać t3 do PATH",
+  "dbd9a279df913da0": "Inne t3 w {path} uruchamia się pierwsze w nowym terminalu. Usuń je, aby korzystać z wersji T3 Code.",
+  "20a48e388fd71c1d": "Uruchamiaj CLI T3 Code jako `t3` z dowolnego terminala.",
+  "4f6e93011ef2da6f": "Zainstalowano w {path}. Otwórz nowy terminal, aby z niego korzystać.",
+  "371ca438cf467125": "Zainstalowano w {path} i dodano do PATH w {file}. Otwórz nowy terminal, aby z niego korzystać.",
+  "fd3eece9d1a7ea38": "Zainstalowano w {path}, ale ten katalog nie jest jeszcze w Twoim PATH.",
+  "5fff98fa978bd008": "Zainstalowano w {path}, ale ten katalog nie jest jeszcze w Twoim PATH. Dodaj jego folder do PATH, aby uruchamiać `t3`.",
+  "dc06294dd4078b00": "Usuń",
+  "b707d919dbf0222a": "Zainstaluj",
+  "9a284b5893dc04a2": "Model OpenRouter",
+  "c8361c16c47d5fb5": "Wyszukaj modele transkrypcji",
+  "d72eccdd92d4f989": "Nie udało się zapisać tej zmiany. Sprawdź połączenie i spróbuj ponownie.",
+  "ef5fef499da688e8": "Zamień klucz API",
+  "cad38c8893ab98e4": "Klucz API",
+  "42ec8bbd6819af00": "Klucz API {company}",
+  "03d751a890780a70": "Referencja klucza API {company}",
+  "2db595fcf95d3ff6": "Podaj klucz API",
+  "7aa0d5470ed46175": "Podaj klucz API, a nie adres URL ani referencję sekretu.",
+  "dad7aceef19f0f5b": "Po zaktualizowaniu klucza dyktowanie pozostanie włączone.",
+  "015e394f14d5ede0": "Zostaw puste, aby zachować zapisany klucz.",
+  "0a9e4d44c145cd07": "Każdy z dostępem do dyktowania w {environment} może generować opłaty na tym kluczu.",
+  "55803224ee096dc0": "Usunąć klucz {company}?",
+  "0a7813c7df04ffe9": "Zarządzaj dyktowaniem OpenRouter",
+  "9996968084688efe": "Zarządzaj kluczem {company}",
+  "bf6a4f30c36e0a87": "Użyć {name} do dyktowania?",
+  "710bec893f7881d1": "Wszyscy, którzy używają {name} do dyktowania w {environment}, stracą dostęp.",
+  "f6737abf6f99aeac": "Każdy z dostępem do dyktowania w {environment} może używać tego klucza API.",
+  "ae3375e7f2d10df7": "Zapisz i włącz",
+  "d07f8134999c97ea": "Zapisz klucz",
+  "a2f4d7c36423bbe5": "Żaden model transkrypcji nie pasuje.",
   "cfbf2641f6fbc99b": [
-    "OpenRouter no longer lists ",
+    "OpenRouter już nie listuje ",
     {
       "i": 1,
       "k": "_gt_value_1",
       "v": "v"
     },
-    ". Dictation stays off until you choose another model."
+    ". Dyktowanie pozostanie wyłączone, dopóki nie wybierzesz innego modelu."
   ],
   "3e91d66852dfc3fe": [
-    "Connect to ",
+    "Połącz się z ",
     {
       "i": 1,
       "k": "_gt_value_1",
       "v": "v"
     },
-    " with dictation access to continue."
+    " z dostępem do dyktowania, aby kontynuować."
   ],
-  "1d33877ef8ea3559": "Retry loading API key",
+  "1d33877ef8ea3559": "Ponów ładowanie klucza API",
   "be805c1729dc0726": [
-    "Update ",
+    "Zaktualizuj ",
     {
       "i": 1,
       "k": "_gt_value_1",
       "v": "v"
     },
-    " to use OpenRouter dictation."
+    " aby korzystać z dyktowania OpenRouter."
   ],
   "d7acad5dde4c1d1b": "Checking for an API key…",
   "8257030da7a4ad4e": "Model",
