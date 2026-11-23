@@ -85,6 +85,13 @@ import {
 } from "~/components/ui/dialog";
 import { Input } from "~/components/ui/input";
 import { Menu, MenuItem, MenuItemLabel, MenuPopup, MenuTrigger } from "~/components/ui/menu";
+import {
+  Select,
+  SelectItem,
+  SelectPopup,
+  SelectTrigger,
+  SelectValue,
+} from "~/components/ui/select";
 import { Popover, PopoverPopup, PopoverTrigger } from "~/components/ui/popover";
 import { ScrollArea } from "~/components/ui/scroll-area";
 import { Textarea } from "~/components/ui/textarea";
@@ -134,6 +141,7 @@ import {
 import { sourceControlClients } from "@t3tools/client-runtime/source-control-clients";
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { formatDiffCount } from "@t3tools/client-runtime/diff-count";
+import { pushRemoteChoicesFor } from "@t3tools/client-runtime/state/vcs";
 import { ChangeBreakdownGrid } from "./pullRequest/ChangeBreakdownGrid";
 import { useOpenLink } from "~/browser/useOpenLink";
 
@@ -198,6 +206,7 @@ interface RunGitActionWithToastInput {
   statusOverride?: VcsStatusResult | null;
   featureBranch?: boolean;
   filePaths?: string[];
+  pushRemote?: string;
 }
 
 interface InlineGitActionSuccess {
@@ -995,6 +1004,74 @@ export function PublishRepositoryDialog(props: PublishRepositoryDialogProps) {
   );
 }
 
+function PushRemoteDialog({
+  choices,
+  canPush,
+  onClose,
+  onPush,
+}: {
+  choices: ReadonlyArray<string> | null;
+  canPush: boolean;
+  onClose: () => void;
+  onPush: (remoteName: string) => void;
+}) {
+  const gt = useGT();
+  const [remoteName, setRemoteName] = useState<string | null>(null);
+  return (
+    <Dialog
+      open={choices !== null}
+      onOpenChange={(open) => {
+        if (!open) onClose();
+      }}
+      onOpenChangeComplete={(open) => {
+        if (!open) setRemoteName(null);
+      }}
+    >
+      <DialogPopup className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>
+            <T>Push to which remote?</T>
+          </DialogTitle>
+          <DialogDescription>
+            <T>
+              This repository has several remotes and the branch has none chosen yet. It will track
+              the one you pick.
+            </T>
+          </DialogDescription>
+        </DialogHeader>
+        <DialogPanel>
+          <Select value={remoteName} onValueChange={setRemoteName}>
+            <SelectTrigger aria-label={gt("Remote")}>
+              <SelectValue placeholder={gt("Choose a remote")} />
+            </SelectTrigger>
+            <SelectPopup>
+              {choices?.map((choice) => (
+                <SelectItem key={choice} value={choice}>
+                  {choice}
+                </SelectItem>
+              ))}
+            </SelectPopup>
+          </Select>
+        </DialogPanel>
+        <DialogFooter>
+          <Button variant="outline" size="sm" onClick={onClose}>
+            <T>Cancel</T>
+          </Button>
+          <Button
+            size="sm"
+            disabled={!canPush || remoteName === null}
+            onClick={() => {
+              if (remoteName) onPush(remoteName);
+            }}
+          >
+            <T>Push</T>
+          </Button>
+        </DialogFooter>
+      </DialogPopup>
+    </Dialog>
+  );
+}
+
 // Local state belongs to one checkout; a new key drops it when the target changes.
 export const GitActionsControl = memo(function GitActionsControl(props: GitActionsControlProps) {
   const checkoutKey = JSON.stringify([
@@ -1044,6 +1121,10 @@ function CheckoutGitActionsControl({
   const [inlineSuccess, setInlineSuccess] = useState<InlineGitActionSuccess | null>(null);
   const [pendingDefaultBranchAction, setPendingDefaultBranchAction] =
     useState<PendingDefaultBranchAction | null>(null);
+  const [pendingPushRemoteAction, setPendingPushRemoteAction] = useState<{
+    input: RunGitActionWithToastInput;
+    choices: ReadonlyArray<string>;
+  } | null>(null);
   const sourceControlScope = { environmentId: activeEnvironmentId, cwd: gitCwd };
   const vcsActionState = useAtomValue(vcsActionManager.stateAtom(sourceControlScope));
   const inlineSuccessExpired = useDeadlinePassed(inlineSuccess?.expiresAtMs ?? null);
@@ -1194,15 +1275,17 @@ function CheckoutGitActionsControl({
     ),
   );
 
-  async function runGitActionWithToast({
-    action,
-    commitMessage,
-    onConfirmed,
-    skipDefaultBranchPrompt = false,
-    statusOverride,
-    featureBranch = false,
-    filePaths,
-  }: RunGitActionWithToastInput) {
+  async function runGitActionWithToast(input: RunGitActionWithToastInput) {
+    const {
+      action,
+      commitMessage,
+      onConfirmed,
+      skipDefaultBranchPrompt = false,
+      statusOverride,
+      featureBranch = false,
+      filePaths,
+      pushRemote,
+    } = input;
     if (
       activeEnvironmentId === null ||
       !readEnvironmentScope(activeEnvironmentId, AuthSourceControlWriteScope) ||
@@ -1240,6 +1323,17 @@ function CheckoutGitActionsControl({
       });
       return false;
     }
+    const pushRemoteChoices = pushRemoteChoicesFor(
+      { action, featureBranch, ...(pushRemote ? { pushRemote } : {}) },
+      actionStatus ?? null,
+    );
+    if (pushRemoteChoices) {
+      setPendingPushRemoteAction({
+        input,
+        choices: pushRemoteChoices,
+      });
+      return false;
+    }
     onConfirmed?.();
     setInlineSuccess(null);
 
@@ -1252,6 +1346,7 @@ function CheckoutGitActionsControl({
       ...(commitMessage ? { commitMessage } : {}),
       ...(featureBranch ? { featureBranch } : {}),
       ...(filePaths ? { filePaths } : {}),
+      ...(pushRemote ? { pushRemote } : {}),
       ...(owner?.threadId ? { threadId: owner.threadId } : {}),
       ...(owner?.projectId ? { projectId: owner.projectId } : {}),
     });
@@ -2045,6 +2140,18 @@ function CheckoutGitActionsControl({
           </DialogFooter>
         </DialogPopup>
       </Dialog>
+
+      <PushRemoteDialog
+        choices={pendingPushRemoteAction?.choices ?? null}
+        canPush={canWriteSourceControl}
+        onClose={() => setPendingPushRemoteAction(null)}
+        onPush={(remoteName) => {
+          if (!pendingPushRemoteAction) return;
+          const { input } = pendingPushRemoteAction;
+          setPendingPushRemoteAction(null);
+          void runGitActionWithToast({ ...input, pushRemote: remoteName });
+        }}
+      />
     </>
   );
 }

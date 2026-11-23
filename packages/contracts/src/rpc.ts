@@ -147,6 +147,7 @@ import {
 } from "./worktreeSetup.ts";
 import {
   GitActionProgressEvent,
+  VcsSetPushRemoteInput,
   VcsSwitchRefInput,
   VcsSwitchRefResult,
   GitCommandError,
@@ -541,6 +542,7 @@ export const WS_METHODS = {
   vcsRemoveWorktree: "vcs.removeWorktree",
   vcsCreateRef: "vcs.createRef",
   vcsSwitchRef: "vcs.switchRef",
+  vcsSetPushRemote: "vcs.setPushRemote",
   vcsInit: "vcs.init",
 
   gitRunStackedAction: "git.runStackedAction",
@@ -1905,6 +1907,11 @@ const WsVcsSwitchRefRpc = Rpc.make(WS_METHODS.vcsSwitchRef, {
   error: Schema.Union([GitCommandError, EnvironmentAuthorizationError]),
 });
 
+const WsVcsSetPushRemoteRpc = Rpc.make(WS_METHODS.vcsSetPushRemote, {
+  payload: VcsSetPushRemoteInput,
+  error: Schema.Union([GitCommandError, EnvironmentAuthorizationError]),
+});
+
 const WsVcsInitRpc = Rpc.make(WS_METHODS.vcsInit, {
   payload: VcsInitInput,
   error: Schema.Union([VcsError, EnvironmentAuthorizationError]),
@@ -2655,6 +2662,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsVcsRemoveWorktreeRpc,
   WsVcsCreateRefRpc,
   WsVcsSwitchRefRpc,
+  WsVcsSetPushRemoteRpc,
   WsVcsInitRpc,
   WsReviewGetBranchCommitsRpc,
   WsReviewGetDiffPreviewRpc,
