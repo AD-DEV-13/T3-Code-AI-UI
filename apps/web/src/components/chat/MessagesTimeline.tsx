@@ -158,7 +158,7 @@ function timelineListStateFor(identity: string): {
     rememberedPosition,
     workGroupViewState: rememberedPosition?.disclosures?.workGroupState ?? {
       scrollPositions: new Map(),
-      expandedEntries: new Set(),
+      entryExpansion: new Map(),
     },
   };
 }
@@ -650,6 +650,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
   }
 
   const preferredToolCallVisibility = useClientSettings((settings) => settings.toolCallVisibility);
+  const toolCallDetailsExpanded = useClientSettings((settings) => settings.toolCallDetailsExpanded);
   const screenReaderAnnouncements = useClientSettings(
     (settings) => settings.screenReaderAnnouncements,
   );
@@ -1152,8 +1153,11 @@ const ConversationTimeline = memo(function ConversationTimeline({
     onToggleTurnFold,
     onToggleAttemptFold,
     onToggleWorkGroup,
-    onToggleWorkEntry: (anchorKey, collapsed, entryId) =>
-      preserveDisclosurePosition(anchorKey, collapsed ? undefined : { entryId }),
+    onToggleWorkEntry: (anchorKey, collapsed, entryId) => {
+      preserveDisclosurePosition(anchorKey, collapsed ? undefined : { entryId });
+      // Positions are otherwise remembered on scroll, so a toggle in an unscrolled thread was lost.
+      rememberPosition(liveFollowEnabled && !anchoredEndSpace);
+    },
     onWorkEntryContentReady: (anchorKey, entryId) => {
       const pending = disclosureRevealRef.current;
       if (
@@ -1173,6 +1177,7 @@ const ConversationTimeline = memo(function ConversationTimeline({
     onWorktreeSetupWorkLocally: onWorktreeSetupWorkLocally ?? null,
     onOpenWorktreeSetupTerminal: onOpenWorktreeSetupTerminal ?? null,
     workGroupViewState,
+    toolCallDetailsExpanded,
   };
   const compactionAwaitingRow =
     isCompacting &&

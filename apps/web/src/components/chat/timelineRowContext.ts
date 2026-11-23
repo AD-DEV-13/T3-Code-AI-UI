@@ -109,6 +109,7 @@ export interface TimelineRowSharedState {
   onWorktreeSetupWorkLocally: (() => void) | null;
   onOpenWorktreeSetupTerminal: ((terminalId: string) => void) | null;
   workGroupViewState: WorkGroupViewState;
+  toolCallDetailsExpanded: boolean;
 }
 
 export interface TimelineRowActivityState {
@@ -130,7 +131,8 @@ export const TimelineRowActivityCtx = createContext<TimelineRowActivityState>(nu
 
 export interface WorkGroupViewState {
   scrollPositions: Map<string, WorkGroupScrollAnchor>;
-  expandedEntries: Set<string>;
+  /** Rows the user opened or closed; the rest follow the expanded-by-default setting. */
+  entryExpansion: Map<string, boolean>;
 }
 
 /** One image the group's agent viewed; `item` is null until its URL resolves. */
@@ -140,7 +142,6 @@ export interface WorkGroupViewedImage {
 }
 
 export const WorkGroupViewCtx = createContext<{
-  state: WorkGroupViewState;
   viewedImages: ReadonlyArray<WorkGroupViewedImage>;
   onToggleEntry: (collapsed: boolean, entryId: string) => void;
   onContentReady?: ((entryId: string) => void) | undefined;
