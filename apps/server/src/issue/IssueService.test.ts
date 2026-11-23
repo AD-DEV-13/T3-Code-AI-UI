@@ -739,6 +739,287 @@ describe("IssueService with a standalone tracker", () => {
     }),
   );
 
+  it.effect("places an issue whose link names no scope by the scope the tracker reports", () =>
+    Effect.gen(function* () {
+      // Shaped like ClickUp: a task link names no list, so the tracker is asked where it is.
+      const lists = new Map([
+        ["abc", "900"],
+        ["xyz", "901"],
+      ]);
+      const commented: string[] = [];
+      const tracker: StandaloneIssueTrackerApi = {
+        ...fakeStandaloneTracker({
+          issueScope: (input) => Effect.succeed(lists.get(input.key) ?? "none"),
+          getIssue: (input) =>
+            Effect.succeed({ ...issue(input.key), url: `https://tasks.test/t/${input.key}` }),
+          comment: (input) => Effect.sync(() => void commented.push(`${input.scope} ${input.key}`)),
+        }),
+        parseIssueUrl: (url) => {
+          const key = /^\/t\/(\w+)$/.exec(url.pathname)?.[1];
+          return url.host !== "tasks.test" || key === undefined
+            ? null
+            : { host: "linear.app", workspace: "all", scope: "task", key };
+        },
+      };
+      const service = yield* makeService({
+        projects: [project({ id: "web" })],
+        trackers: [tracker],
+        bindings: { web: { tracker: LINEAR, scope: "900" } },
+      });
+
+      expect(yield* service.resolveUrl("https://tasks.test/t/abc")).toMatchObject({
+        scope: "900",
+        writable: true,
+        issue: { scope: "900", writable: true },
+      });
+      expect(yield* service.resolveUrl("https://tasks.test/t/xyz")).toMatchObject({
+        scope: "901",
+        writable: false,
+      });
+
+      const ref = { projectId: "web" as ProjectId, tracker: LINEAR, host: "linear.app" };
+      yield* service.comment({ ...ref, scope: "task", key: "abc", body: "hi" });
+      expect(commented).toEqual(["900 abc"]);
+      // A client naming the bound list does not make a task elsewhere writable.
+      const refused = yield* service
+        .comment({ ...ref, scope: "900", key: "xyz", body: "hi" })
+        .pipe(Effect.result);
+      expect(refused).toMatchObject({ _tag: "Failure", failure: { reason: "read-only" } });
+      expect(commented).toEqual(["900 abc"]);
+    }),
+  );
+
+  it.effect("serves a placed issue through the project bound to its scope", () =>
+    Effect.gen(function* () {
+      const commented: string[] = [];
+      const tracker: StandaloneIssueTrackerApi = {
+        ...fakeStandaloneTracker({
+          issueScope: () => Effect.succeed("901"),
+          getIssue: (input) =>
+            Effect.succeed({ ...issue(input.key), url: `https://tasks.test/t/${input.key}` }),
+          comment: (input) => Effect.sync(() => void commented.push(`${input.scope} ${input.key}`)),
+        }),
+        parseIssueUrl: (url) => {
+          const key = /^\/t\/(\w+)$/.exec(url.pathname)?.[1];
+          return key === undefined
+            ? null
+            : { host: "linear.app", workspace: "all", scope: "task", key };
+        },
+      };
+      const service = yield* makeService({
+        projects: [project({ id: "web" }), project({ id: "api" })],
+        trackers: [tracker],
+        bindings: {
+          web: { tracker: LINEAR, scope: "900" },
+          api: { tracker: LINEAR, scope: "901" },
+        },
+      });
+
+      // The client opened the link through `web`, the first project bound to the tracker.
+      const ref = { projectId: "web" as ProjectId, tracker: LINEAR, host: "linear.app" };
+      expect(yield* service.detail({ ...ref, scope: "task", key: "xyz" })).toMatchObject({
+        projectId: "api",
+        scope: "901",
+        writable: true,
+      });
+      yield* service.comment({ ...ref, scope: "task", key: "xyz", body: "hi" });
+      expect(commented).toEqual(["901 xyz"]);
+      expect(
+        yield* service.resolveUrl("https://tasks.test/t/xyz", "web" as ProjectId),
+      ).toMatchObject({ projectId: "api", scope: "901", writable: true });
+    }),
+  );
+
+  it.effect("asks another account when the opening project's account cannot see the issue", () =>
+    Effect.gen(function* () {
+      const expired = IssueTrackerAccountId.make("expired");
+      const third = IssueTrackerAccountId.make("third");
+      const refuse = (reason: "not-found" | "unauthenticated") =>
+        Effect.fail(
+          new IssueTrackerError({
+            tracker: LINEAR,
+            operation: "issueScope",
+            reason,
+            detail: reason,
+          }),
+        );
+      const tracker: StandaloneIssueTrackerApi = {
+        ...fakeStandaloneTracker({
+          // Only the third account's workspace has the task; the second's token has expired.
+          issueScope: () =>
+            Effect.flatMap(IssueTrackerAccount, (account) =>
+              account === third
+                ? Effect.succeed("901")
+                : refuse(account === expired ? "unauthenticated" : "not-found"),
+            ),
+        }),
+      };
+      const service = yield* makeService({
+        projects: [project({ id: "web" }), project({ id: "docs" }), project({ id: "api" })],
+        trackers: [tracker],
+        bindings: {
+          web: { tracker: LINEAR, scope: "900" },
+          docs: { tracker: LINEAR, accountId: expired, scope: "905" },
+          api: { tracker: LINEAR, accountId: third, scope: "901" },
+        },
+      });
+      const ref = { projectId: "web" as ProjectId, tracker: LINEAR, host: "linear.app" };
+      expect(yield* service.detail({ ...ref, scope: "task", key: "xyz" })).toMatchObject({
+        projectId: "api",
+        scope: "901",
+        writable: true,
+      });
+      // A thread link made from the key names the scope a URL link would.
+      expect(yield* service.projectScope("web" as ProjectId, { key: "xyz" })).toMatchObject({
+        scope: "901",
+      });
+    }),
+  );
+
+  it.effect("passes over an opening account whose token fails", () =>
+    Effect.gen(function* () {
+      const working = IssueTrackerAccountId.make("working");
+      const tracker = fakeStandaloneTracker({
+        issueScope: () =>
+          Effect.flatMap(IssueTrackerAccount, (account) =>
+            account === working
+              ? Effect.succeed("901")
+              : Effect.fail(
+                  new IssueTrackerError({
+                    tracker: LINEAR,
+                    operation: "issueScope",
+                    reason: "unauthenticated",
+                    detail: "expired",
+                  }),
+                ),
+          ),
+      });
+      const service = yield* makeService({
+        projects: [project({ id: "web" }), project({ id: "api" })],
+        trackers: [tracker],
+        bindings: {
+          web: { tracker: LINEAR, scope: "900" },
+          api: { tracker: LINEAR, accountId: working, scope: "901" },
+        },
+      });
+      const ref = { projectId: "web" as ProjectId, tracker: LINEAR, host: "linear.app" };
+      expect(yield* service.detail({ ...ref, scope: "task", key: "xyz" })).toMatchObject({
+        projectId: "api",
+        scope: "901",
+      });
+      expect(yield* service.projectScope("web" as ProjectId, { key: "xyz" })).toMatchObject({
+        scope: "901",
+      });
+    }),
+  );
+
+  it.effect(
+    "keeps a read through the working account when only an expired one binds the scope",
+    () =>
+      Effect.gen(function* () {
+        const working = IssueTrackerAccountId.make("working");
+        const tracker = fakeStandaloneTracker({
+          // Only the working account can read; the task's list 900 is bound by the expired one.
+          getIssue: (input) =>
+            Effect.flatMap(IssueTrackerAccount, (account) =>
+              account === working
+                ? Effect.succeed(issue(input.key))
+                : Effect.fail(
+                    new IssueTrackerError({
+                      tracker: LINEAR,
+                      operation: "getIssue",
+                      reason: "unauthenticated",
+                      detail: "expired",
+                    }),
+                  ),
+            ),
+          issueScope: () =>
+            Effect.flatMap(IssueTrackerAccount, (account) =>
+              account === working
+                ? Effect.succeed("900")
+                : Effect.fail(
+                    new IssueTrackerError({
+                      tracker: LINEAR,
+                      operation: "issueScope",
+                      reason: "unauthenticated",
+                      detail: "expired",
+                    }),
+                  ),
+            ),
+        });
+        const service = yield* makeService({
+          projects: [project({ id: "web" }), project({ id: "api" })],
+          trackers: [tracker],
+          bindings: {
+            web: { tracker: LINEAR, scope: "900" },
+            api: { tracker: LINEAR, accountId: working, scope: "901" },
+          },
+        });
+        const ref = { projectId: "web" as ProjectId, tracker: LINEAR, host: "linear.app" };
+        expect(yield* service.detail({ ...ref, scope: "task", key: "xyz" })).toMatchObject({
+          projectId: "api",
+          scope: "900",
+          writable: false,
+        });
+        expect(yield* service.projectScope("web" as ProjectId, { key: "xyz" })).toMatchObject({
+          scope: "900",
+        });
+        // The read a key-only link takes its metadata from goes through the working account.
+        expect(yield* service.linkMetadata({ ...ref, scope: "900", key: "xyz" })).toMatchObject({
+          displayKey: "#xyz",
+        });
+      }),
+  );
+
+  it.effect("tries the next account when placing a link's issue fails", () =>
+    Effect.gen(function* () {
+      const second = IssueTrackerAccountId.make("second");
+      const tracker = fakeStandaloneTracker({
+        issueScope: () =>
+          Effect.flatMap(IssueTrackerAccount, (account) =>
+            account === second
+              ? Effect.succeed("OPS")
+              : Effect.fail(
+                  new IssueTrackerError({
+                    tracker: LINEAR,
+                    operation: "issueScope",
+                    reason: "rate-limited",
+                    detail: "slow down",
+                  }),
+                ),
+          ),
+      });
+      const service = yield* makeService({
+        projects: [project({ id: "web" }), project({ id: "api" })],
+        trackers: [tracker],
+        bindings: {
+          web: { tracker: LINEAR, scope: "ENG" },
+          api: { tracker: LINEAR, accountId: second, scope: "OPS" },
+        },
+      });
+      expect(
+        yield* service.resolveUrl("https://linear.app/acme/issue/ENG-1/old-title"),
+      ).toMatchObject({ projectId: "api", scope: "OPS", writable: true });
+    }),
+  );
+
+  it.effect("names a key-only reference by the scope the tracker places it in", () =>
+    Effect.gen(function* () {
+      // The task's list is bound only by another project.
+      const service = yield* makeService({
+        projects: [project({ id: "web" }), project({ id: "api" })],
+        trackers: [fakeStandaloneTracker({ issueScope: () => Effect.succeed("901") })],
+        bindings: {
+          web: { tracker: LINEAR, scope: "900" },
+          api: { tracker: LINEAR, scope: "901" },
+        },
+      });
+      expect(yield* service.projectScope("web" as ProjectId, { key: "xyz" })).toMatchObject({
+        scope: "901",
+      });
+    }),
+  );
+
   it.effect("lists a bound project's standalone scopes beside its git host and serves them", () =>
     Effect.gen(function* () {
       const listed: string[] = [];

@@ -10,6 +10,11 @@ import {
   LINEAR_KIND,
   parseLinearIssueUrl,
 } from "@t3tools/issue-tracker-linear/shared/issueUrl";
+import {
+  CLICKUP_HOST,
+  CLICKUP_KIND,
+  parseClickUpIssueUrl,
+} from "@t3tools/issue-tracker-clickup/shared/issueUrl";
 
 import { sourceControlClients } from "./sourceControlClients.ts";
 import type { EnvironmentProject } from "./state/shell.ts";
@@ -63,8 +68,11 @@ function parseIssueLink(
 
 function parseStandaloneIssueLink(url: string) {
   try {
-    const link = parseLinearIssueUrl(new URL(url));
-    return link === null ? null : { tracker: LINEAR_KIND, link };
+    const parsed = new URL(url);
+    const linear = parseLinearIssueUrl(parsed);
+    if (linear !== null) return { tracker: LINEAR_KIND, link: linear };
+    const clickup = parseClickUpIssueUrl(parsed);
+    return clickup === null ? null : { tracker: CLICKUP_KIND, link: clickup };
   } catch {
     return null;
   }
@@ -77,7 +85,9 @@ export function isStandaloneIssueLink(url: string): boolean {
 
 /** A cheap pre-check, so text without such a link never asks for the bindings. */
 export function mayContainStandaloneIssueLink(text: string): boolean {
-  return text.includes(`${LINEAR_HOST}/`);
+  // Hosts are case-insensitive in a URL, and the parsers read them that way.
+  const lower = text.toLowerCase();
+  return lower.includes(`${LINEAR_HOST}/`) || lower.includes(`${CLICKUP_HOST}/t/`);
 }
 
 /**
@@ -100,7 +110,9 @@ function resolveStandaloneIssueLink<Project extends LinkProject>(
         (connection) =>
           connection.tracker === tracker &&
           connection.account !== null &&
-          connection.workspace?.toLowerCase() === link.workspace.toLowerCase(),
+          // A tracker whose links name no workspace (ClickUp) matches every account.
+          (link.workspace === "" ||
+            connection.workspace?.toLowerCase() === link.workspace.toLowerCase()),
       )
       .map((connection) => connection.accountId ?? null),
   );

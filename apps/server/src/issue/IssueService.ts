@@ -320,34 +320,99 @@ const make = Effect.gen(function* () {
     );
 
   /**
-   * The project whose checkout and credentials serve a reference, and whether the reference is
-   * one of the project's own scopes. A reference naming another scope on the same tracker and
-   * host is served by the project but marked read-only. A project with two trackers serves the
-   * one the reference names.
+   * The project serving a reference, read-only unless the scope is one of its own. A tracker
+   * that reports each issue's scope (`issueScope`) is asked, so a link naming none, or a client
+   * naming the wrong one, cannot misplace a write; another project bound to that scope serves it.
    */
-  const requireProject = (
-    ref: IssueScopeRef,
-  ): Effect.Effect<SupportedProject & { readonly writable: boolean }, IssueError> =>
-    listProjects({ projectId: ref.projectId }).pipe(
-      Effect.flatMap(({ supported }) => {
-        const host = ref.host?.trim().toLowerCase();
-        const onHost = supported.filter(
-          (candidate) =>
-            candidate.tracker === ref.tracker && (host === undefined || candidate.host === host),
-        );
-        const scope = ref.scope.trim();
-        const own = onHost.find(
-          (candidate) => candidate.scope.toLowerCase() === scope.toLowerCase(),
-        );
-        const served = own ?? onHost[0];
-        if (served === undefined) {
-          return Effect.fail(new IssueUnavailableError({ reason: "tracker-unsupported" }));
-        }
-        return Effect.succeed({ ...served, scope, writable: own !== undefined });
-      }),
+  const requireProject = Effect.fn("IssueService.requireProject")(function* (
+    ref: IssueScopeRef & { readonly key?: string | undefined },
+  ) {
+    const { supported } = yield* listProjects({ projectId: ref.projectId });
+    const host = ref.host?.trim().toLowerCase();
+    const onHost = supported.filter(
+      (candidate) =>
+        candidate.tracker === ref.tracker && (host === undefined || candidate.host === host),
     );
+    const place = (scope: string) => {
+      const own = onHost.find((candidate) => candidate.scope.toLowerCase() === scope.toLowerCase());
+      const served = own ?? onHost[0];
+      return served === undefined ? null : { ...served, scope, writable: own !== undefined };
+    };
+    const placed = place(ref.scope.trim());
+    if (placed === null) {
+      return yield* new IssueUnavailableError({ reason: "tracker-unsupported" });
+    }
+    const key = ref.key;
+    if (key === undefined || placed.api.issueScope === undefined) return placed;
+    const scopeOf = (lender: SupportedProject) => {
+      const read = lender.api.issueScope;
+      return (
+        read === undefined
+          ? Effect.fail<IssueError>(
+              new IssueOperationError({
+                operation: "scope",
+                reason: "not-found",
+                detail: "This tracker cannot place the issue.",
+              }),
+            )
+          : read({
+              cwd: lender.project.workspaceRoot,
+              host: lender.host,
+              scope: placed.scope,
+              key,
+            }).pipe(Effect.mapError(toIssueError("scope")))
+      ).pipe(Effect.result);
+    };
 
-  const requireWritable = (ref: IssueScopeRef, operation: string) =>
+    const first = yield* scopeOf(placed);
+    if (first._tag === "Success") {
+      const here = place(first.success) ?? placed;
+      if (here.writable) return here;
+    }
+    // This project's account may not see the task, or does not bind its scope: another account
+    // or project on the same tracker may, and the one that binds the scope serves it.
+    const { supported: everywhere } = yield* listProjects({ host: placed.host });
+    const sameTracker = everywhere.filter((candidate) => candidate.tracker === ref.tracker);
+    let found: { readonly lender: SupportedProject; readonly scope: string } | undefined =
+      first._tag === "Success" ? { lender: placed, scope: first.success } : undefined;
+    // An account that cannot be used is passed over like one that cannot see the issue; its
+    // error is the answer only when no account can read it.
+    let failure: IssueError | null = first._tag === "Failure" ? first.failure : null;
+    const tried = new Set([placed.accountId]);
+    for (const candidate of sameTracker) {
+      if (found !== undefined) break;
+      if (tried.has(candidate.accountId)) continue;
+      tried.add(candidate.accountId);
+      const read = yield* scopeOf(candidate);
+      if (read._tag === "Success") found = { lender: candidate, scope: read.success };
+      else if (failure === null || isNotFound(failure)) failure = read.failure;
+    }
+    if (found === undefined) {
+      return yield* failure ?? new IssueUnavailableError({ reason: "tracker-unsupported" });
+    }
+    const { lender, scope } = found;
+    const matches = (candidate: SupportedProject) =>
+      candidate.scope.toLowerCase() === scope.toLowerCase();
+    const sameAccount = sameTracker.find(
+      (candidate) => matches(candidate) && candidate.accountId === lender.accountId,
+    );
+    if (sameAccount !== undefined) return { ...sameAccount, writable: true };
+    // Another account binds the scope: it serves only once it is seen reading the issue there,
+    // else the account that did read it lends a read-only view.
+    for (const candidate of sameTracker) {
+      if (!matches(candidate)) continue;
+      const read = yield* scopeOf(candidate);
+      if (read._tag === "Success" && read.success.toLowerCase() === scope.toLowerCase()) {
+        return { ...candidate, writable: true };
+      }
+    }
+    return { ...lender, scope, writable: false };
+  });
+
+  const requireWritable = (
+    ref: IssueScopeRef & { readonly key?: string | undefined },
+    operation: string,
+  ) =>
     requireProject(ref).pipe(
       Effect.filterOrFail(
         (project) => project.writable,
@@ -748,7 +813,24 @@ const make = Effect.gen(function* () {
         detail: `This project does not track ${select?.scope?.trim()}. Use one of: ${[...new Set(supported.map((candidate) => candidate.scope))].join(", ")}.`,
       });
     }
-    return { projectId, tracker: own.tracker, host: own.host, scope: own.scope };
+    // A key-only reference to a tracker that places its own issues takes the scope the issue is
+    // in, through whichever account reads it, so a thread link names the same scope as one made
+    // from a URL or the issue list.
+    const placedScope =
+      named === undefined && select?.key !== undefined && own.api.issueScope !== undefined
+        ? yield* requireProject({
+            projectId,
+            tracker: own.tracker,
+            host: own.host,
+            scope: own.scope,
+            key: select.key,
+          }).pipe(
+            Effect.map((placed) => placed.scope),
+            // Only a hint: the read or write that follows reports a missing issue itself.
+            Effect.orElseSucceed(() => undefined),
+          )
+        : undefined;
+    return { projectId, tracker: own.tracker, host: own.host, scope: placedScope ?? own.scope };
   });
 
   /** A host whose hostname does not name it, such as GitHub Enterprise Server, is vouched for by a project on it. */
@@ -796,9 +878,11 @@ const make = Effect.gen(function* () {
       const preferFirst = (projects: ReadonlyArray<SupportedProject>) =>
         projects.find((project) => project.project.id === preferredProjectId) ?? projects[0];
       const scope = link.scope.toLowerCase();
-      const serve = (candidates: ReadonlyArray<SupportedProject>) => {
+      const serve = (candidates: ReadonlyArray<SupportedProject>, wanted = link.scope) => {
         const own =
-          preferFirst(candidates.filter((project) => project.scope.toLowerCase() === scope)) ??
+          preferFirst(
+            candidates.filter((project) => project.scope.toLowerCase() === wanted.toLowerCase()),
+          ) ??
           preferFirst(
             candidates.filter(
               (project) => project.scope.toLowerCase() === gitHost?.link.scopeAlias,
@@ -808,7 +892,7 @@ const make = Effect.gen(function* () {
         if (lender === undefined) return null;
         const served = {
           ...lender,
-          scope: own === undefined ? link.scope : lender.scope,
+          scope: own === undefined ? wanted : lender.scope,
           writable: own !== undefined,
         };
         const resolved = {
@@ -842,8 +926,13 @@ const make = Effect.gen(function* () {
         return yield* new IssueUnavailableError({ reason: "tracker-unsupported" });
       }
       let failure: IssueError | null = null;
+      // A tracker that places issues itself may read one through an account that does not bind
+      // its scope; a later account that does is preferred, this read kept as the fallback.
+      let readable: (IssueRef & { host: string; writable: boolean; issue: IssueDetail }) | null =
+        null;
       for (const accountId of accounts) {
-        const found = serve(onTracker.filter((project) => project.accountId === accountId));
+        const candidates = onTracker.filter((project) => project.accountId === accountId);
+        const found = serve(candidates);
         if (found === null) continue;
         const read = yield* found.lender.api
           .getIssue({
@@ -861,9 +950,28 @@ const make = Effect.gen(function* () {
         const canonicalUrl = parseUrl(read.success.url);
         const canonical = canonicalUrl === null ? null : standalone.api.parseIssueUrl(canonicalUrl);
         if (canonical !== null && canonical.workspace === standalone.link.workspace) {
-          return { ...found.resolved, issue: toDetail(found.served, read.success) };
+          const { issueScope } = found.lender.api;
+          if (issueScope === undefined) {
+            return { ...found.resolved, issue: toDetail(found.served, read.success) };
+          }
+          const scope = yield* issueScope({
+            cwd: found.lender.project.workspaceRoot,
+            host: found.lender.host,
+            scope: link.scope,
+            key: link.key,
+          }).pipe(Effect.mapError(toIssueError("resolveUrl")), Effect.result);
+          // Only a placed scope makes the link writable; a read without one stays a fallback.
+          const placed =
+            scope._tag === "Success" ? (serve(candidates, scope.success) ?? found) : found;
+          if (scope._tag === "Failure" && (failure === null || isNotFound(failure))) {
+            failure = scope.failure;
+          }
+          const result = { ...placed.resolved, issue: toDetail(placed.served, read.success) };
+          if (scope._tag === "Success" && result.writable) return result;
+          readable ??= result;
         }
       }
+      if (readable !== null) return readable;
       return yield* (
         failure ??
           new IssueOperationError({

@@ -108,6 +108,14 @@ function IssueReactionBar({
   );
 }
 
+/**
+ * Where the server placed the issue, for scope reads: a ClickUp link names no list until the task
+ * is read. Writes keep the opened reference, so they refresh the detail this panel shows.
+ */
+function placedScope(reference: IssueRef, detail: IssueDetail): IssueRef {
+  return { ...reference, projectId: detail.projectId, scope: detail.scope };
+}
+
 function IssueLabelPicker({
   environmentId,
   reference,
@@ -122,13 +130,16 @@ function IssueLabelPicker({
   disabledReason: string;
 }) {
   const gt = useGT();
+  const registry = useContext(RegistryContext);
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [picks, setPicks] = useState(noIssuePicks<IssueLabelCandidate>);
   const current = issuePicksFor(picks, detail, open);
   const draft = current.draft;
   const candidatesQuery = useEnvironmentQuery(
-    open ? issueEnvironment.candidates({ environmentId, input: reference }) : null,
+    open
+      ? issueEnvironment.candidates({ environmentId, input: placedScope(reference, detail) })
+      : null,
   );
   const update = useAtomCommand(issueEnvironment.update, { reportFailure: false });
   const applied = new Set(detail.labels.map((label) => label.name));
@@ -160,6 +171,8 @@ function IssueLabelPicker({
         return;
       }
       setPicks((latest) => issuePicksAfterFailedWrite(latest, sent));
+      // The tracker may have applied part of the change before refusing the rest.
+      registry.refresh(issueEnvironment.detail({ environmentId, input: reference }));
       toastManager.add({
         type: "error",
         title: m(msg("Could not change labels")),
@@ -239,13 +252,16 @@ function IssueAssigneePicker({
   disabledReason: string;
 }) {
   const gt = useGT();
+  const registry = useContext(RegistryContext);
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [picks, setPicks] = useState(noIssuePicks<IssueAssigneeCandidate>);
   const current = issuePicksFor(picks, detail, open);
   const draft = current.draft;
   const candidatesQuery = useEnvironmentQuery(
-    open ? issueEnvironment.candidates({ environmentId, input: reference }) : null,
+    open
+      ? issueEnvironment.candidates({ environmentId, input: placedScope(reference, detail) })
+      : null,
   );
   const update = useAtomCommand(issueEnvironment.update, { reportFailure: false });
   const needle = query.toLowerCase();
@@ -276,6 +292,8 @@ function IssueAssigneePicker({
         return;
       }
       setPicks((latest) => issuePicksAfterFailedWrite(latest, sent));
+      // The tracker may have applied part of the change before refusing the rest.
+      registry.refresh(issueEnvironment.detail({ environmentId, input: reference }));
       toastManager.add({
         type: "error",
         title: m(msg("Could not change assignees")),
@@ -625,9 +643,9 @@ export function IssueDetailPanel({
             <span className="flex-1" />
             {stateControl}
             <IssueThreadLinks
-              key={`${environmentId}:${detail.url}`}
+              key={`${environmentId}:${detail.url}:${detail.scope}`}
               environmentId={environmentId}
-              reference={{ ...reference, host: reference.host ?? detail.host }}
+              reference={{ ...placedScope(reference, detail), host: reference.host ?? detail.host }}
               issue={detail}
               threadRef={threadRef}
             />
