@@ -2779,13 +2779,13 @@
   "4614a422f1430cd7": "Name",
   "d3502e7db0cdb998": "Keybinding",
   "86f71ac04d41f95e": [
-    "Press a shortcut. Use ",
+    "Naciśnij skrót. Użyj ",
     {
       "t": "code",
       "i": 1,
       "c": "Backspace"
     },
-    " to clear. Shortcuts are environment-wide. Projects using the same action share its shortcut."
+    " aby wyczyścić. Skróty obejmują całe środowisko. Projekty używające tego samego działania współdzielą jego skrót."
   ],
   "ac049cf1be6726fc": "Command",
   "7de9d2f24736adbc": "Preview URL (optional)",
