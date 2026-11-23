@@ -78,12 +78,17 @@ what the newest client sends.
 
 ## Turn completion and checkpoints
 
-A provider turn ending and its follow-up work settling are separate milestones. Orchestration
-records provider turn and run state independently from
-[run finalization](../../apps/server/src/orchestration-v2/RunFinalizationService.ts). A late
-checkpoint or diff must not extend the recorded provider duration or keep the client showing
-provider work as active. PR discovery after completion also checks that the checkout still matches
-the thread's non-default branch and that a newer run is not active.
+A provider turn ending and its follow-up work settling are separate milestones. A run is
+`completed` when its provider turn ends, so clients stop showing it as active. The turn-end
+checkpoint is captured afterwards by
+[run finalization](../../apps/server/src/orchestration-v2/RunFinalizationService.ts), an outbox
+effect on the thread's effect lane, which runs a thread's effects in order. Until that capture
+commits, the completed run has no checkpoint record, and readers treat it as pending, not missing.
+Command decisions still see the run as `waiting`, so steers, queued turns, rollback and restore
+line up behind the capture exactly as they did when runs completed only after it. Runs stored as
+`waiting` come from servers that completed a run only after capture.
+PR discovery after completion also checks that the checkout still matches the thread's
+non-default branch and that a newer run is not active.
 
 [Checkpoints](../../apps/server/src/checkpointing/CheckpointStore.ts) use hidden Git refs to
 capture workspace state without adding commits to the user's branch. A revert must coordinate
