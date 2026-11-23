@@ -224,7 +224,7 @@ import * as WorkspaceFolders from "./workspace/WorkspaceFolders.ts";
 import * as TaskFolders from "./workspace/TaskFolders.ts";
 import * as KnownWorkspaces from "./workspace/KnownWorkspaces.ts";
 import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
-import { readWorkflowScript } from "./orchestration-v2/workflowScriptQuery.ts";
+import * as WorkflowScriptQuery from "./orchestration-v2/workflowScriptQuery.ts";
 import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
 import * as VcsStatusBroadcaster from "./vcs/VcsStatusBroadcaster.ts";
 import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
@@ -1545,6 +1545,7 @@ export const layerWsRpc = (
       const agentSessionImporter = yield* AgentSessionImporter.AgentSessionImporter;
       const checkpointDiffQuery = yield* CheckpointDiffQuery.CheckpointDiffQuery;
       const nativeChildWork = yield* NativeChildWorkQuery.NativeChildWorkQuery;
+      const workflowScripts = yield* WorkflowScriptQuery.WorkflowScriptQuery;
       const keybindings = yield* Keybindings.Keybindings;
       const featureFlags = yield* FeatureFlags.FeatureFlags;
       const environmentTheme = yield* EnvironmentTheme.EnvironmentThemeService;
@@ -2079,7 +2080,7 @@ export const layerWsRpc = (
         [ORCHESTRATION_V2_WS_METHODS.forceStopThread]: (input) =>
           threadManagement.forceStopThread(input),
         [ORCHESTRATION_V2_WS_METHODS.getWorkflowScript]: (input) =>
-          readWorkflowScript({ scriptPath: input.scriptPath }),
+          workflowScripts.readWorkflowScript(input),
         [ORCHESTRATION_V2_WS_METHODS.getNativeChildWork]: (input) =>
           nativeChildWork.getNativeChildWork(input),
         [ORCHESTRATION_V2_WS_METHODS.getTurnItem]: (input) =>
