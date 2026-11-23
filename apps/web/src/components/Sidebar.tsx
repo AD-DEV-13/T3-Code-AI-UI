@@ -45,6 +45,7 @@ import {
   type ShownOrder,
 } from "@t3tools/client-runtime/state/thread-search";
 import { foldSearchQuery, rankMessageMatches } from "@t3tools/shared/paletteSearch";
+import { isThreadMuted } from "@t3tools/shared/threadMute";
 import { findForMessageMatch, openThreadFindOnQuery } from "./chat/threadFindStore";
 import {
   threadRuntimeCanArchive,
@@ -226,6 +227,7 @@ import { SidebarPointerSensor } from "./Sidebar.pointer";
 import { createSidebarListMotion } from "./Sidebar.motion";
 import { createSidebarShiftGuard } from "./Sidebar.shiftGuard";
 import {
+  pickMuteEnd,
   pickSnoozePreset,
   resolveSnoozePresets,
   snoozeWakeLabel,
@@ -948,6 +950,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     unpinThread,
     confirmAndUnpinThread,
     setThreadAutoSettle,
+    setThreadMuted,
     turnThreadIntoProject,
     reorderPinnedThread,
     reorderActiveThread,
@@ -2674,6 +2677,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         const supportsAutoSettleOptOut =
           serverConfigs.get(thread.environmentId)?.environment.capabilities
             .threadAutoSettleOptOut === true;
+        const supportsMute =
+          serverConfigs.get(thread.environmentId)?.environment.capabilities.threadMute === true;
         const isRegeneratingTitle = thread.titleRegeneration != null;
         const isSettled = settledThreadKeysRef.current.has(threadKey);
         const isSnoozed = snoozedThreadKeysRef.current.has(threadKey);
@@ -2710,6 +2715,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
               isPinned,
               isSettled,
               autoSettleEnabled: thread.autoSettleDisabledAt == null,
+              isMuted: isThreadMuted(thread, Date.now()),
               isSnoozed,
               canSnoozeNow: canSnooze(thread, { now: new Date().toISOString() }),
               isRegeneratingTitle,
@@ -2723,6 +2729,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
               supports: {
                 settlement: configLoaded,
                 autoSettleOptOut: supportsAutoSettleOptOut,
+                mute: supportsMute,
                 snooze: configLoaded,
                 pinning: configLoaded,
                 titleRegeneration: configLoaded,
@@ -2746,6 +2753,32 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                   thread.environmentId,
                 );
           if (preset) attemptSnooze(threadRef, preset);
+          return;
+        }
+        const reportMuteFailure = (title: string, result: AtomCommandResult<unknown, unknown>) => {
+          if (result._tag !== "Failure" || isAtomCommandInterrupted(result)) return;
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title,
+              description: error instanceof Error ? error.message : m(msg("An error occurred.")),
+            }),
+          );
+        };
+        if (clicked.value?.startsWith("mute:")) {
+          const choice = await pickMuteEnd(
+            clicked.value as `mute:${string}`,
+            snoozePresets,
+            timestampFormat,
+            thread.environmentId,
+          );
+          if (choice) {
+            reportMuteFailure(
+              m(msg("Failed to mute notifications")),
+              await setThreadMuted(threadRef, true, choice.mutedUntil),
+            );
+          }
           return;
         }
         switch (clicked.value) {
@@ -2839,6 +2872,12 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             }
             return;
           }
+          case "unmute":
+            reportMuteFailure(
+              m(msg("Failed to unmute notifications")),
+              await setThreadMuted(threadRef, false),
+            );
+            return;
           case "rename":
             startThreadRename(threadRef, thread.title);
             return;

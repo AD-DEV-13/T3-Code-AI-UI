@@ -1085,6 +1085,7 @@ export function applyToProjection(
       };
     case "thread.visited":
     case "thread.marked-unread":
+    case "thread.mute-set":
       return {
         ...projection,
         thread: event.payload,
@@ -1249,6 +1250,8 @@ export type AgentAwarenessThread = ProjectThreadAwarenessV2Input["thread"] &
     | "archivedAt"
     | "snoozedUntil"
     | "snoozedAt"
+    | "mutedAt"
+    | "mutedUntil"
     | "pendingGuestMessageCount"
     | "activeRunId"
     | "latestRunId"
@@ -2016,6 +2019,9 @@ export function threadShellFromProjection(
     pinnedAt: projection.thread.pinnedAt ?? null,
 
     autoSettleDisabledAt: projection.thread.autoSettleDisabledAt ?? null,
+    mutedAt: projection.thread.mutedAt ?? null,
+    mutedUntil: projection.thread.mutedUntil ?? null,
+    unmutedRunAt: projection.thread.unmutedRunAt ?? null,
     pinOrderKey: projection.thread.pinOrderKey ?? null,
     ...(projection.thread.tags?.length ? { tags: projection.thread.tags } : {}),
     lastVisitedAt: projection.thread.lastVisitedAt,
@@ -2317,6 +2323,9 @@ function shellFromState(input: {
     pinnedAt: input.state.thread.pinnedAt ?? null,
 
     autoSettleDisabledAt: input.state.thread.autoSettleDisabledAt ?? null,
+    mutedAt: input.state.thread.mutedAt ?? null,
+    mutedUntil: input.state.thread.mutedUntil ?? null,
+    unmutedRunAt: input.state.thread.unmutedRunAt ?? null,
     pinOrderKey: input.state.thread.pinOrderKey ?? null,
     ...(input.state.thread.tags?.length ? { tags: input.state.thread.tags } : {}),
     lastVisitedAt: input.state.thread.lastVisitedAt,
@@ -2526,6 +2535,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             case "thread.tags-updated":
             case "thread.visited":
             case "thread.marked-unread":
+            case "thread.mute-set":
             case "thread.metadata-updated":
             case "thread.pull-request-synced":
             case "thread.issue-synced":
@@ -3380,6 +3390,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             event.type !== "thread.visited" &&
             event.type !== "thread.visit-recorded" &&
             event.type !== "thread.marked-unread" &&
+            event.type !== "thread.mute-set" &&
             event.type !== "thread.metadata-updated" &&
             event.type !== "thread.pull-request-synced" &&
             event.type !== "thread.issue-synced" &&
@@ -9474,6 +9485,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               archivedAt: state.thread.archivedAt,
               snoozedUntil: state.thread.snoozedUntil ?? null,
               snoozedAt: state.thread.snoozedAt ?? null,
+              mutedAt: state.thread.mutedAt ?? null,
+              mutedUntil: state.thread.mutedUntil ?? null,
               pendingGuestMessageCount: pendingGuestMessageCount(state.thread.guestShare),
               activeRunId: state.activeRunId,
               latestRunId: state.latestRunId,
