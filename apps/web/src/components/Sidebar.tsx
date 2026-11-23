@@ -377,6 +377,10 @@ interface SidebarThreadPartitionInput {
   readonly clockKey: string;
 }
 
+function isPlatformModKey(event: { readonly metaKey: boolean; readonly ctrlKey: boolean }) {
+  return isMacPlatform(navigator.platform) ? event.metaKey : event.ctrlKey;
+}
+
 function scrollSidebarToTop(content: HTMLElement | null) {
   content?.closest("[data-slot=scroll-area-viewport]")?.scrollTo({ top: 0 });
 }
@@ -1599,10 +1603,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const readOpensPullRequestsInRightPanel = useStableCallback(() => routeThreadRef !== null);
   const handleThreadClick = (event: ReactMouseEvent, threadRef: ScopedThreadRef) => {
     if (isSidebarNestedLinkClick(event.target)) return;
-    const isMac = isMacPlatform(navigator.platform);
-    const isModClick = isMac ? event.metaKey : event.ctrlKey;
     const threadKey = scopedThreadKey(threadRef);
-    if (isModClick) {
+    if (isPlatformModKey(event)) {
       event.preventDefault();
       toggleThreadSelection(threadKey);
       return;
@@ -3092,7 +3094,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                       setProjectScopeKeys([]);
                     } else if (
                       eventDetails.event instanceof MouseEvent &&
-                      eventDetails.event.shiftKey
+                      isPlatformModKey(eventDetails.event)
                     ) {
                       // Canceling skips Base UI's commit, which would freeze the search query, and its close.
                       eventDetails.cancel();
@@ -3172,13 +3174,18 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                           toggleProjectGroupPin(project);
                           return;
                         }
-                        if (event.ctrlKey || event.altKey || event.metaKey) return;
-                        if (event.shiftKey && event.key === "Enter") {
+                        if (
+                          event.key === "Enter" &&
+                          !event.shiftKey &&
+                          !event.altKey &&
+                          isPlatformModKey(event)
+                        ) {
                           if (!project) return;
                           event.preventDefault();
                           toggleProjectScopeKey(project.projectKey);
                           return;
                         }
+                        if (event.ctrlKey || event.altKey || event.metaKey) return;
                         if (
                           event.key !== "ContextMenu" &&
                           !(event.shiftKey && event.key === "F10")
