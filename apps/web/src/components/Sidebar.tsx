@@ -2,6 +2,9 @@ import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
 import { msg, T, useGT, useMessages } from "gt-react";
 import { m } from "../i18n/messages";
 import { attachSidebarTree } from "../lib/sidebarTree";
+import { observeIntersection } from "../lib/observeIntersection";
+import { ScrollArea } from "./ui/scroll-area";
+import { Spinner } from "./ui/spinner";
 import { type EnvironmentId, type ScopedProjectRef } from "@t3tools/contracts";
 import type { EnvironmentServerConfig } from "@t3tools/client-runtime/connection";
 import {
@@ -17,6 +20,7 @@ import { Atom } from "effect/reactivity";
 import * as Schema from "effect/Schema";
 import {
   DndContext,
+  DragOverlay,
   useSensor,
   useSensors,
   type AutoScrollOptions,
@@ -26,7 +30,7 @@ import {
   type Modifier,
 } from "@dnd-kit/core";
 import { SortableContext } from "@dnd-kit/sortable";
-import { restrictToFirstScrollableAncestor, restrictToVerticalAxis } from "@dnd-kit/modifiers";
+import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import {
   canSnooze,
   effectiveSnoozed,
@@ -68,16 +72,10 @@ import {
   type OlderSettledScope,
 } from "@t3tools/client-runtime/state/threads";
 
-import {
-  CheckIcon,
-  ChevronDownIcon,
-  FolderIcon,
-  FolderPlusIcon,
-  PlusIcon,
-  SettingsIcon,
-} from "lucide-react";
+import { CheckIcon, FolderIcon, FolderPlusIcon, PlusIcon, SettingsIcon } from "lucide-react";
 import {
   useEffect,
+  useEffectEvent,
   useLayoutEffect,
   useReducer,
   useRef,
@@ -86,7 +84,9 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
+  type RefObject,
 } from "react";
+import { createPortal } from "react-dom";
 import { type AnyRouter, useRouter } from "@tanstack/react-router";
 
 import {
@@ -220,7 +220,10 @@ import {
 import {
   createSidebarCollisionDetection,
   createSidebarSortingStrategy,
+  excludeScrolledOutRows,
+  isNestedSidebarScroller,
   restrictBelowSidebarLabel,
+  restrictToSidebarViewport,
 } from "./Sidebar.drag";
 import { SidebarPointerSensor } from "./Sidebar.pointer";
 import { createSidebarListMotion } from "./Sidebar.motion";
@@ -267,6 +270,7 @@ import {
 } from "../composerDraftStore";
 import { useShownThreadRouteTarget } from "../hooks/useShownThreadRouteTarget";
 import {
+  DragOverlayThreadRow,
   SidebarSearchResultRow,
   SortableThreadRow,
   type SidebarProviderEntry,
@@ -341,11 +345,85 @@ const EMPTY_PROVIDER_ENTRIES: ReadonlyMap<string, SidebarProviderEntry> = new Ma
 const EMPTY_THREADS: readonly EnvironmentThreadShell[] = [];
 const EMPTY_DRAFT_IDS: readonly DraftId[] = [];
 
-const SETTLED_TAIL_INITIAL_COUNT = 10;
+const SETTLED_TAIL_INITIAL_COUNT = 25;
 const SETTLED_TAIL_PAGE_COUNT = 25;
 const SETTLED_SHELF_EXPANDED_KEY = "t3code:sidebar:settled-expanded";
 const SNOOZED_SHELF_EXPANDED_KEY = "t3code:sidebar:snoozed-expanded";
 const WORKING_SHELF_EXPANDED_KEY = "t3code:sidebar:working-expanded";
+
+// Rows the Settled shelf shows before it scrolls; the partial row hints at more below.
+const SETTLED_SHELF_ROWS = 8.5;
+// Starts the next page a row before the Settled scroller reaches its end.
+const SETTLED_PAGER_MARGIN = "0px 0px 36px 0px";
+
+/** Pages in the next settled threads as the end of the Settled scroller comes into view. */
+function SettledShelfPager({ onReachEnd }: { readonly onReachEnd: () => void }) {
+  const ref = useRef<HTMLLIElement>(null);
+  const reachEnd = useEffectEvent(onReachEnd);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- observes the end of the Settled scroller, an external scroll position, to page in older threads
+  useEffect(() => {
+    const node = ref.current;
+    if (node === null) return;
+    let reached = false;
+    return observeIntersection(
+      node,
+      (entry) => {
+        if (!entry.isIntersecting || reached) return;
+        reached = true;
+        reachEnd();
+      },
+      {
+        root: node.closest('[data-slot="scroll-area-viewport"]'),
+        rootMargin: SETTLED_PAGER_MARGIN,
+      },
+    );
+  }, []);
+  return <li ref={ref} aria-hidden className="h-px shrink-0 list-none" />;
+}
+
+interface SettledShelfScroll {
+  readonly scopeKey: string | null;
+  readonly top: number;
+}
+
+/**
+ * The Settled shelf's scroller, mounted per project scope and expansion. An expanded one returns
+ * to its scope's last offset. A collapsed one lists only the open thread, so its clamped offset
+ * is not kept.
+ */
+function SettledShelfScrollArea(props: {
+  readonly saved: RefObject<SettledShelfScroll>;
+  readonly scopeKey: string | null;
+  readonly expanded: boolean;
+  readonly children: ReactNode;
+}) {
+  const { saved, scopeKey, expanded } = props;
+  const attachRoot = (root: HTMLDivElement) => {
+    const viewport = expanded
+      ? root.querySelector<HTMLElement>('[data-slot="scroll-area-viewport"]')
+      : null;
+    if (viewport === null) return undefined;
+    if (saved.current.scopeKey === scopeKey) viewport.scrollTop = saved.current.top;
+    const remember = () => {
+      saved.current = { scopeKey, top: viewport.scrollTop };
+    };
+    viewport.addEventListener("scroll", remember, { passive: true });
+    return () => viewport.removeEventListener("scroll", remember);
+  };
+  return (
+    <ScrollArea
+      ref={attachRoot}
+      subtleScrollbars
+      scrollFade
+      chainVerticalScroll
+      // Rows provide keyboard access, as in the sidebar's own scroll area.
+      viewportTabIndex={-1}
+      style={{ maxHeight: `calc(${SETTLED_SHELF_ROWS} * 2.25rem)` }}
+    >
+      {props.children}
+    </ScrollArea>
+  );
+}
 
 const inboxReturns = createInboxReturnTracker();
 
@@ -900,7 +978,12 @@ function checkThreadOperations(
 const SIDEBAR_DRAG_DISTANCE = 6;
 
 // dnd-kit's 20% edge zone at full speed runs the list away while the pointer rests near the bottom.
-const SIDEBAR_AUTO_SCROLL: AutoScrollOptions = { threshold: { x: 0, y: 0.05 }, acceleration: 3 };
+const SIDEBAR_AUTO_SCROLL: AutoScrollOptions = {
+  threshold: { x: 0, y: 0.05 },
+  acceleration: 3,
+  // The Settled shelf scrolls on its own; scrolling it under a drag would move rows dnd-kit measured.
+  canScroll: (element) => !isNestedSidebarScroller(element),
+};
 
 const SIDEBAR_DRAG_LABEL_HEIGHT = 24;
 
@@ -1061,6 +1144,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const dragLabelOffsetRef = useRef(0);
   const listMotionRef = useRef<ReturnType<typeof createSidebarListMotion> | null>(null);
   const shiftGuardRef = useRef<ReturnType<typeof createSidebarShiftGuard> | null>(null);
+  // The Settled shelf scrolls on its own, so its rows get their own motion and shift guard.
+  const settledMotionRef = useRef<ReturnType<typeof createSidebarListMotion> | null>(null);
+  const settledShiftGuardRef = useRef<ReturnType<typeof createSidebarShiftGuard> | null>(null);
+  const settledScrollRef = useRef<SettledShelfScroll>({ scopeKey: null, top: 0 });
   const [dragState, setDragState] = useState<{
     readonly activeKey: string;
     readonly activeSection: SidebarSection;
@@ -1727,11 +1814,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   };
   const restrictBelowPins: Modifier = (args) =>
     restrictBelowSidebarLabel(args, dragLabelOffsetRef.current);
-  const dndModifiers = [
-    restrictToVerticalAxis,
-    restrictBelowPins,
-    restrictToFirstScrollableAncestor,
-  ];
+  const dndModifiers = [restrictToVerticalAxis, restrictBelowPins, restrictToSidebarViewport];
   const attachListMotionRef = (node: HTMLUListElement) => {
     threadListRef.current = node;
     const motion = createSidebarListMotion(node);
@@ -1749,6 +1832,20 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       if (listMotionRef.current === motion) listMotionRef.current = null;
       if (shiftGuardRef.current === shiftGuard) shiftGuardRef.current = null;
       if (threadListRef.current === node) threadListRef.current = null;
+    };
+  };
+
+  const attachSettledListRef = (node: HTMLUListElement) => {
+    const motion = createSidebarListMotion(node);
+    settledMotionRef.current = motion;
+    motion.update(false);
+    const shiftGuard = createSidebarShiftGuard(node);
+    settledShiftGuardRef.current = shiftGuard;
+    return () => {
+      motion.dispose();
+      shiftGuard.dispose();
+      if (settledMotionRef.current === motion) settledMotionRef.current = null;
+      if (settledShiftGuardRef.current === shiftGuard) settledShiftGuardRef.current = null;
     };
   };
 
@@ -1774,6 +1871,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     endThreadContextDrag();
     if (started) {
       listMotionRef.current?.release();
+      settledMotionRef.current?.release();
       setDragState(null);
     }
   };
@@ -1950,6 +2048,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     const activeSection = sectionByThreadKey.get(activeKey);
     if (activeSection === undefined) return;
     listMotionRef.current?.suspend();
+    settledMotionRef.current?.suspend();
     const list = threadListRef.current;
     const viewport = list?.closest('[data-slot="scroll-area-viewport"]');
     dragScrollRef.current = viewport ? { viewport, top: viewport.scrollTop } : null;
@@ -1957,8 +2056,11 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     if (list && header) {
       const listRect = list.getBoundingClientRect();
       const scale = list.offsetWidth > 0 ? listRect.width / list.offsetWidth : 1;
+      // dnd-kit measures from the row's own list, which is the Settled shelf's for settled rows.
+      const row = list.querySelector(`[data-thread-item="${CSS.escape(activeKey)}"]`);
+      const containerTop = (row?.parentElement ?? list).getBoundingClientRect().top;
       dragLabelOffsetRef.current =
-        header.getBoundingClientRect().top - listRect.top + SIDEBAR_DRAG_LABEL_HEIGHT * scale;
+        header.getBoundingClientRect().top - containerTop + SIDEBAR_DRAG_LABEL_HEIGHT * scale;
     } else {
       dragLabelOffsetRef.current = 0;
     }
@@ -2057,10 +2159,12 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- records moved rows and updates list motion after each layout-affecting commit
   useLayoutEffect(() => {
     shiftGuardRef.current?.update();
+    settledShiftGuardRef.current?.update();
     // Shelf rows would travel over stationary headers below the bottom-anchored shelf.
     const shelvesUnchanged = previousShelfExpansionKeyRef.current === shelfExpansionKey;
     previousShelfExpansionKeyRef.current = shelfExpansionKey;
     listMotionRef.current?.update(listMotionPass.animate && shelvesUnchanged);
+    settledMotionRef.current?.update(listMotionPass.animate && shelvesUnchanged);
   }, [listMotionPass, shelfExpansionKey]);
   const handleThreadDragOver = (event: DragOverEvent) => {
     const target = event.over
@@ -2092,6 +2196,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     ...(draggedActiveOrder === undefined ? {} : { activeOrder: draggedActiveOrder }),
     settledExpanded: settledShelfExpanded,
     settledVisibleCount,
+    settledShelfRows: SETTLED_SHELF_ROWS,
     routeThreadKey: routeRowThreadKey,
     snoozedThreadCount: snoozedThreads.length,
   });
@@ -3051,6 +3156,11 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       ? shortcutLabelForCommand(keybindings, "chat.newLocal")
       : undefined);
   const newThreadInProjectShortcutLabel = shortcutLabelForCommand(keybindings, "chat.newLocal");
+  // Settled rows drag out of their own scroller, which would clip the row in place.
+  const overlayDragKey =
+    dragState !== null && !isContextDrag && dragState.activeSection === "settled"
+      ? dragState.activeKey
+      : null;
   return (
     <SidebarFolderDrop>
       <SidebarChromeHeader isElectron={isElectron} />
@@ -3456,7 +3566,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
               <DndContext
                 sensors={dndSensors}
                 autoScroll={isContextDrag ? false : SIDEBAR_AUTO_SCROLL}
-                collisionDetection={dndCollisionDetection}
+                collisionDetection={excludeScrolledOutRows(dndCollisionDetection)}
                 modifiers={dndModifiers}
                 onDragStart={handleThreadDragStart}
                 onDragOver={handleThreadDragOver}
@@ -3484,6 +3594,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                         section: SidebarSection,
                         // The tree row of the project folder this row sits in.
                         folderRow?: string,
+                        overlay = false,
                       ) => {
                         const threadKey = scopedThreadKey(
                           scopeThreadRef(thread.environmentId, thread.id),
@@ -3497,11 +3608,13 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                           : isCard
                             ? "card"
                             : "slim";
+                        const Row = overlay ? DragOverlayThreadRow : SortableThreadRow;
                         return (
-                          <SortableThreadRow
+                          <Row
                             key={threadKey}
                             sortableId={threadKey}
                             contextDrag={isContextDrag}
+                            lifted={overlayDragKey === threadKey}
                             sortableDisabled={
                               renamingThreadKey === threadKey ||
                               !draggableThreadKeys.has(threadKey) ||
@@ -3613,11 +3726,15 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                           onDraftContextMenu={handleDraftContextMenu}
                         />,
                       ];
+                      const settledRows: ReactNode[] = [];
+                      let settledHeaderIndex = -1;
                       for (const item of sidebarListItems) {
                         if (item.kind === "thread") {
                           // Folders draw active rows in their own place below.
                           if (projectFolders !== null && item.section === "active") continue;
-                          items.push(renderThreadRow(threadByKey.get(item.key)!, item.section));
+                          (item.section === "settled" ? settledRows : items).push(
+                            renderThreadRow(threadByKey.get(item.key)!, item.section),
+                          );
                           continue;
                         }
                         if (projectFolders !== null && item.marker === "active-placeholder") {
@@ -3717,23 +3834,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                             );
                             break;
                           case "settled-header":
-                            items.push(
-                              <SidebarSectionHeader
-                                key="settled-shelf-header"
-                                marker="settled-header"
-                                className={cn(
-                                  workingThreads.length + snoozedThreads.length === 0 && "mt-auto",
-                                )}
-                                label={gt("Settled", { $context: "sidebar section" })}
-                                count={settledCount}
-                                dragging={from !== null}
-                                isDropTarget={dragTargetSection === "settled"}
-                                toggle={{
-                                  expanded: settledShelfExpanded,
-                                  onToggle: toggleSettledShelf,
-                                }}
-                              />,
-                            );
+                            // Built after the loop, once it holds the shelf's rows.
+                            settledHeaderIndex = items.length;
+                            items.push(null);
                             break;
                           case "settled-placeholder":
                             items.push(
@@ -3755,37 +3858,98 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                             break;
                         }
                       }
+                      let settledEnd: ReactNode = null;
+                      if (settledShelfExpanded && hiddenSettledCount > 0) {
+                        if (olderSettledShelf.loading) {
+                          settledEnd = (
+                            <li
+                              key="settled-status"
+                              className="flex h-8 shrink-0 list-none items-center justify-center"
+                            >
+                              <Spinner size="sm" tone="muted" />
+                            </li>
+                          );
+                        } else if (olderSettledShelf.failed) {
+                          settledEnd = (
+                            <li key="settled-status" className="list-none">
+                              <button
+                                type="button"
+                                data-sidebar-row="settled:more"
+                                data-sidebar-parent="shelf:settled"
+                                onClick={olderSettledShelf.retry}
+                                className="flex h-9 w-full cursor-pointer items-center gap-2.5 rounded-md px-2.5 text-left text-sm text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
+                              >
+                                {gt("Could not load older threads. Retry")}
+                              </button>
+                            </li>
+                          );
+                        } else if (dragState === null) {
+                          // Keyed by page so each page observes afresh and a short one keeps filling.
+                          settledEnd = (
+                            <SettledShelfPager
+                              key={`settled-pager:${settledVisibleCount}`}
+                              onReachEnd={showMoreSettled}
+                            />
+                          );
+                        }
+                      }
+                      if (settledHeaderIndex >= 0) {
+                        // The shelf rides in the header's element so drag projections move them together.
+                        const shelf =
+                          settledRows.length > 0 || settledEnd !== null ? (
+                            <div className="mt-px">
+                              <SettledShelfScrollArea
+                                key={`${projectScopeKey ?? ""}:${settledShelfExpanded}`}
+                                saved={settledScrollRef}
+                                scopeKey={projectScopeKey}
+                                expanded={settledShelfExpanded}
+                              >
+                                <ul
+                                  ref={attachSettledListRef}
+                                  role="presentation"
+                                  className="relative flex flex-col gap-px"
+                                >
+                                  {settledRows}
+                                  {settledEnd}
+                                </ul>
+                              </SettledShelfScrollArea>
+                              {/* The header's drag transform would anchor a fixed overlay to it. */}
+                              {overlayDragKey !== null && threadByKey.has(overlayDragKey)
+                                ? createPortal(
+                                    <DragOverlay dropAnimation={null}>
+                                      {renderThreadRow(
+                                        threadByKey.get(overlayDragKey)!,
+                                        "settled",
+                                        undefined,
+                                        true,
+                                      )}
+                                    </DragOverlay>,
+                                    document.body,
+                                  )
+                                : null}
+                            </div>
+                          ) : null;
+                        items[settledHeaderIndex] = (
+                          <SidebarSectionHeader
+                            key="settled-shelf-header"
+                            marker="settled-header"
+                            className={cn(
+                              workingThreads.length + snoozedThreads.length === 0 && "mt-auto",
+                            )}
+                            label={gt("Settled", { $context: "sidebar section" })}
+                            count={settledCount}
+                            dragging={from !== null}
+                            isDropTarget={dragTargetSection === "settled"}
+                            toggle={{
+                              expanded: settledShelfExpanded,
+                              onToggle: toggleSettledShelf,
+                            }}
+                            below={shelf}
+                          />
+                        );
+                      }
                       return items;
                     })()}
-                    {settledShelfExpanded && hiddenSettledCount > 0 ? (
-                      <li className="list-none">
-                        <button
-                          type="button"
-                          data-sidebar-row="settled:more"
-                          data-sidebar-parent="shelf:settled"
-                          aria-disabled={olderSettledShelf.loading}
-                          onClick={() => {
-                            if (olderSettledShelf.loading) return;
-                            olderSettledShelf.retry();
-                            showMoreSettled();
-                          }}
-                          className="flex h-9 w-full cursor-pointer items-center gap-2.5 rounded-md px-2.5 text-left text-sm text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground aria-disabled:cursor-default"
-                        >
-                          {/* Plus means "add", so revealing more uses a chevron. */}
-                          <ChevronDownIcon aria-hidden className="size-4 shrink-0" />
-                          {olderSettledShelf.loading
-                            ? gt("Loading")
-                            : olderSettledShelf.failed
-                              ? gt("Could not load older threads. Retry")
-                              : gt(
-                                  "{count, plural, one {Show {count} more} other {Show {count} more}}",
-                                  {
-                                    count: Math.min(hiddenSettledCount, SETTLED_TAIL_PAGE_COUNT),
-                                  },
-                                )}
-                        </button>
-                      </li>
-                    ) : null}
                   </ul>
                 </SortableContext>
               </DndContext>
