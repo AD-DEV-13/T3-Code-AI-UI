@@ -3,6 +3,8 @@ import { msg, T, useGT, useLocale, useMessages } from "gt-react-native";
 import { m } from "../../i18n/messages";
 import { errorDisplayMessage } from "@t3tools/client-runtime/errors";
 import { toServerClock } from "@t3tools/client-runtime/clock";
+import { readAloudController } from "../read-aloud/playback";
+import { ReadAloudButton } from "../read-aloud/ReadAloudButton";
 import { formatDuration } from "@t3tools/shared/orchestrationTimingCopy";
 import { Sheet } from "../../components/ui/Sheet";
 import { ListActionRow } from "../../components/ui/ListActionRow";
@@ -2720,6 +2722,12 @@ function renderFeedEntry(
                 sourceTitle={props.threadTitle}
               />
             ) : null}
+            <ReadAloudButton
+              id={`${props.environmentId}:${props.threadId}:${message.id}`}
+              text={renderedText}
+              buttonSize={props.replyActionSize.button}
+              iconSize={props.replyActionSize.icon}
+            />
             <Text className="font-t3-medium text-xs tabular-nums text-foreground-secondary">
               {timestampLabel}
             </Text>
@@ -3152,6 +3160,19 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   const gt = useGT();
   const m = useMessages();
   const formatMessageTime = useMessageTimeFormatter();
+  useFocusEffect(
+    useCallback(
+      () => () => {
+        if (
+          readAloudController
+            .getSnapshot()
+            .id?.startsWith(`${props.environmentId}:${props.threadId}:`)
+        )
+          readAloudController.stop();
+      },
+      [props.environmentId, props.threadId],
+    ),
+  );
   const { listRef, onIsAtEndChange, onHeaderMaterialVisibilityChange } = props;
   const workflowOpening = useWorkflowOpening(props.detailRef);
   const guestShare = useThreadGuestShare(props.detailRef);

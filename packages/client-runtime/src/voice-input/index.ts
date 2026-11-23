@@ -42,3 +42,13 @@ export {
   type VoiceTranscriptionErrorCode,
   type VoiceTranscriptionOptions,
 } from "./transcription.ts";
+
+export {
+  cancelSpeechSynthesisModelDownload,
+  downloadSpeechSynthesisModel,
+  getSpeechSynthesisModels,
+  linkSpeechSynthesisModels,
+  prepareSpeechSynthesis,
+  removeSpeechSynthesisModel,
+  startSpeechSynthesis,
+} from "./environment.ts";

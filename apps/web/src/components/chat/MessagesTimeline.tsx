@@ -1,3 +1,4 @@
+import { readAloudController } from "../../speech/readAloud";
 import { T, useGT, useMessages, Var } from "gt-react";
 import type { SideThreadOpenIntent } from "@t3tools/client-runtime/side-thread";
 import type { ThreadRunSummary } from "@t3tools/client-runtime/state/models";
@@ -342,6 +343,14 @@ interface MessagesTimelineProps {
 }
 
 export function MessagesTimeline(props: MessagesTimelineProps) {
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- Speech follows the displayed thread rather than the lifetime of virtualized message rows.
+  useEffect(
+    () => () => {
+      if (readAloudController.getSnapshot().id?.startsWith(`${props.routeThreadKey}:`))
+        readAloudController.stop();
+    },
+    [props.routeThreadKey],
+  );
   const find = useContext(ThreadFindTimelineContext);
   const findOpen = find?.findOpen ?? props.findOpen;
   return (
