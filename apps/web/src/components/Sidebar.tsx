@@ -190,6 +190,7 @@ import {
   ADD_PROJECT_SCOPE_ITEM_VALUE,
   filterSidebarProjectScopeItems,
   firstValidTimestampMs,
+  isOpenThreadRenameKey,
   isSidebarNestedLinkClick,
   isTrailingDoubleClick,
   orderItemsByPreferredIds,
@@ -2957,10 +2958,22 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       if (event.defaultPrevented || event.repeat || isCommandPaletteOpen() || isModelPickerOpen()) {
         return;
       }
-      const command = resolveShortcutCommand(event, keybindings, {
-        platform: navigator.platform,
-        context: threadShortcutContext(routeThreadRef),
-      });
+      const platform = navigator.platform;
+      const context = threadShortcutContext(routeThreadRef);
+      if (routeThreadRef && routeThreadKey && isOpenThreadRenameKey(event, routeThreadKey)) {
+        // A shortcut bound to the key in the composer keeps it.
+        const bound = resolveShortcutCommand(event, keybindings, {
+          platform,
+          context: { ...context, composerFocus: true },
+        });
+        const routeThread = threadByKey.get(routeThreadKey);
+        if (bound === null && routeThread) {
+          event.preventDefault();
+          startThreadRename(routeThreadRef, routeThread.title);
+          return;
+        }
+      }
+      const command = resolveShortcutCommand(event, keybindings, { platform, context });
       const navigateToRowKey = (targetRowKey: string | null) => {
         if (!targetRowKey) return false;
         const targetDraftId = draftIdByRowKey.get(targetRowKey);
@@ -2997,7 +3010,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     navigateToThread,
     orderedRowKeys,
     routeRowKey,
+    routeThreadKey,
     routeThreadRef,
+    startThreadRename,
     threadByKey,
   ]);
 
