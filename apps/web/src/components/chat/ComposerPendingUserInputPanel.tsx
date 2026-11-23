@@ -1,6 +1,6 @@
 import { type RuntimeRequestId, type ScopedThreadRef } from "@t3tools/contracts";
 import { markdownProseDirection, textDirection } from "~/textDirection";
-import { useGT } from "gt-react";
+import { T, useGT } from "gt-react";
 import { memo, use, useEffect, useEffectEvent, useRef, useState } from "react";
 import { BackgroundThreadContext } from "./backgroundThread";
 import { useStableCallback } from "~/hooks/useStableCallback";
@@ -14,18 +14,22 @@ import { cn } from "~/lib/utils";
 import { isInSideChatPane } from "~/lib/sideChatPane";
 import { ComposerBanner } from "./ComposerBanner";
 import ChatMarkdown from "../ChatMarkdown";
+import { Input } from "../ui/input";
 
 interface PendingUserInputPanelProps {
   pendingUserInputs: PendingUserInput[];
   cwd: string | undefined;
   threadRef: ScopedThreadRef;
-  disabled?: boolean;
+  disabled?: boolean | undefined;
   respondingRequestIds: RuntimeRequestId[];
   answers: Record<string, PendingUserInputDraftAnswer>;
   questionIndex: number;
   onToggleOption: (questionId: string, optionValue: string) => void;
+  onSelectOther?: ((questionId: string) => void) | undefined;
+  onChangeCustomAnswer?: ((questionId: string, value: string) => void) | undefined;
   onAdvance: () => void;
   onDismiss: (requestId: RuntimeRequestId) => void;
+  onFocusComposer?: (() => void) | undefined;
 }
 
 export const ComposerPendingUserInputPanel = memo(function ComposerPendingUserInputPanel({
@@ -37,8 +41,11 @@ export const ComposerPendingUserInputPanel = memo(function ComposerPendingUserIn
   answers,
   questionIndex,
   onToggleOption,
+  onSelectOther,
+  onChangeCustomAnswer,
   onAdvance,
   onDismiss,
+  onFocusComposer,
 }: PendingUserInputPanelProps) {
   if (pendingUserInputs.length === 0) return null;
   const activePrompt = pendingUserInputs[0];
@@ -55,8 +62,11 @@ export const ComposerPendingUserInputPanel = memo(function ComposerPendingUserIn
       answers={answers}
       questionIndex={questionIndex}
       onToggleOption={onToggleOption}
+      onSelectOther={onSelectOther}
+      onChangeCustomAnswer={onChangeCustomAnswer}
       onAdvance={onAdvance}
       onDismiss={onDismiss}
+      onFocusComposer={onFocusComposer}
     />
   );
 });
@@ -70,8 +80,11 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
   answers,
   questionIndex,
   onToggleOption,
+  onSelectOther,
+  onChangeCustomAnswer,
   onAdvance,
   onDismiss,
+  onFocusComposer: _onFocusComposer,
 }: {
   prompt: PendingUserInput;
   cwd: string | undefined;
@@ -81,14 +94,18 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
   answers: Record<string, PendingUserInputDraftAnswer>;
   questionIndex: number;
   onToggleOption: (questionId: string, optionValue: string) => void;
+  onSelectOther?: ((questionId: string) => void) | undefined;
+  onChangeCustomAnswer?: ((questionId: string, value: string) => void) | undefined;
   onAdvance: () => void;
   onDismiss: (requestId: RuntimeRequestId) => void;
+  onFocusComposer?: (() => void) | undefined;
 }) {
   const gt = useGT();
   // Message-mode requests remain answerable after their provider turn ends.
   const canRespond = prompt.responseCapability !== "not_resumable";
   const responseDisabled = disabled || isResponding || !canRespond;
   const autoAdvanceTimerRef = useRef<number | null>(null);
+  const otherInputRef = useRef<HTMLInputElement>(null);
   const advance = useStableCallback(onAdvance);
   const [optimisticSingleSelect, setOptimisticSingleSelect] = useState<{
     questionId: string;
@@ -98,7 +115,10 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
   // Keep question identity stable for its shortcut listener.
   const progress = derivePendingUserInputProgress(prompt.questions, answers, questionIndex);
   const activeQuestion = progress.activeQuestion;
-  const customAnswerActive = progress.customAnswer.trim().length > 0;
+  const customAnswerActive =
+    (progress.activeDraft?.otherSelected === true &&
+      (progress.selectedOptionValues.length === 0 || activeQuestion?.multiSelect)) ||
+    progress.customAnswer.trim().length > 0;
   // Read before later hooks to preserve the question's compiler cache.
   const draftSelectedOptions = activeQuestion?.options.map(
     (option) =>
@@ -146,7 +166,27 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
     }, 200);
   };
 
+  const handleSelectOtherOption = () => {
+    if (disabled || isResponding || !activeQuestion) return;
+    if (autoAdvanceTimerRef.current !== null) {
+      window.clearTimeout(autoAdvanceTimerRef.current);
+      autoAdvanceTimerRef.current = null;
+    }
+    setOptimisticSingleSelect(null);
+    if (onSelectOther) {
+      onSelectOther(activeQuestion.id);
+    } else {
+      for (const val of progress.selectedOptionValues) {
+        onToggleOption(activeQuestion.id, val);
+      }
+    }
+    window.requestAnimationFrame(() => {
+      otherInputRef.current?.focus();
+    });
+  };
+
   const selectOptionFromShortcut = useEffectEvent(handleOptionSelection);
+  const selectOtherFromShortcut = useEffectEvent(handleSelectOtherOption);
   const backgroundThread = use(BackgroundThreadContext);
 
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes a document keydown listener for digit shortcuts while a question is answerable
@@ -170,11 +210,18 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
       const digit = Number.parseInt(event.key, 10);
       if (Number.isNaN(digit) || digit < 1 || digit > 9) return;
       const optionIndex = digit - 1;
-      if (optionIndex >= activeQuestion.options.length) return;
-      const option = activeQuestion.options[optionIndex];
-      if (!option) return;
-      event.preventDefault();
-      selectOptionFromShortcut(activeQuestion.id, option.value ?? option.label);
+      if (optionIndex < activeQuestion.options.length) {
+        const option = activeQuestion.options[optionIndex];
+        if (!option) return;
+        event.preventDefault();
+        selectOptionFromShortcut(activeQuestion.id, option.value ?? option.label);
+      } else if (
+        optionIndex === activeQuestion.options.length &&
+        activeQuestion.options.length > 0
+      ) {
+        event.preventDefault();
+        selectOtherFromShortcut();
+      }
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
@@ -343,6 +390,84 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
                   </div>
                 );
               })}
+              {activeQuestion.options.length > 0 && (
+                <div>
+                  <button
+                    type="button"
+                    aria-pressed={customAnswerActive}
+                    disabled={disabled || isResponding}
+                    onClick={handleSelectOtherOption}
+                    className={cn(
+                      questionTextAlign,
+                      "group flex w-full items-start gap-2.5 rounded-md bg-transparent py-1.5 ps-2 sm:ps-1.5 outline-none transition-colors duration-150 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-primary/25",
+                      customAnswerActive
+                        ? "text-foreground"
+                        : "text-foreground/70 hover:bg-muted/30",
+                      (disabled || isResponding) && "opacity-50 cursor-not-allowed",
+                      !disabled && !isResponding && "cursor-pointer",
+                    )}
+                  >
+                    <span className="pointer-events-none flex h-5 shrink-0 items-center">
+                      {activeQuestion.multiSelect ? (
+                        <CheckboxMark checked={customAnswerActive} variant="contrast" />
+                      ) : (
+                        <OptionRadio checked={customAnswerActive} />
+                      )}
+                    </span>
+                    <div className="min-w-0 flex-1 flex flex-col gap-0.5">
+                      <span className="text-sm font-medium">
+                        <T>Other</T>
+                      </span>
+                      <span className="text-secondary-label text-2xs">
+                        {customAnswerActive ? (
+                          <T>Type your custom answer below</T>
+                        ) : (
+                          <T>Type a custom response or suggestion</T>
+                        )}
+                      </span>
+                    </div>
+                    {activeQuestion.options.length < 9 ? (
+                      <span className="flex h-5 w-7 shrink-0 items-center justify-center sm:w-6">
+                        <Kbd>{activeQuestion.options.length + 1}</Kbd>
+                      </span>
+                    ) : null}
+                  </button>
+                  {customAnswerActive && (
+                    <div
+                      className="ps-9 pe-2 pb-1.5 sm:ps-8"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                      }}
+                    >
+                      <Input
+                        ref={otherInputRef}
+                        size="compact"
+                        value={progress.customAnswer}
+                        placeholder={gt("Type your custom answer...")}
+                        disabled={disabled || isResponding}
+                        onChange={(e) => {
+                          onChangeCustomAnswer?.(activeQuestion.id, e.target.value);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            if (
+                              e.nativeEvent.isComposing ||
+                              e.nativeEvent.keyCode === 229 ||
+                              e.keyCode === 229
+                            ) {
+                              return;
+                            }
+                            e.preventDefault();
+                            if (progress.canAdvance) {
+                              advance();
+                            }
+                          }
+                        }}
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </ComposerBanner.Body>
         </ComposerBanner.Scroll>

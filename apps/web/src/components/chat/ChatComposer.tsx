@@ -489,6 +489,7 @@ export interface ChatComposerProps {
   onResume: () => void;
   onInterrupt: () => void;
   onSelectActivePendingUserInputOption: (questionId: string, optionValue: string) => void;
+  onSelectActivePendingUserInputOther: (questionId: string) => void;
   onAdvanceActivePendingUserInput: () => void;
   onDismissActivePendingUserInput: (requestId: RuntimeRequestId) => void;
   onPreviousActivePendingUserInputQuestion: () => void;
@@ -592,7 +593,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     onResume,
     onInterrupt,
     onSelectActivePendingUserInputOption,
-    onAdvanceActivePendingUserInput,
+    onSelectActivePendingUserInputOther,
+    onAdvanceActivePendingUserInput: _onAdvanceActivePendingUserInput,
     onDismissActivePendingUserInput,
     onPreviousActivePendingUserInputQuestion,
     onChangeActivePendingUserInputCustomAnswer,
@@ -1266,8 +1268,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const composerSuggestionsVisible = composerMenuOpen;
   const composerSuggestionListVisible = composerSuggestionsVisible && composerMenuItems.length > 0;
   const activePendingUserInput = pendingUserInputs[0] ?? null;
-  const isChoiceOnlyPendingQuestion =
-    activePendingProgress?.activeQuestion?.allowCustomAnswer === false;
+  const isChoiceOnlyPendingQuestion = false;
   const showComposerTopDrawer = pendingUserInputs.length > 0;
   const showCollapsedMobilePromptRow = isComposerCollapsedMobile;
   const showComposerAttachAction =
@@ -1710,7 +1711,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       : detectComposerTrigger(nextPrompt, expandedCursor);
     const updateTrigger = textChanged ? setComposerTrigger : followComposerCaret;
     if (activePendingProgress?.activeQuestion && pendingUserInputs.length > 0) {
-      if (activePendingProgress.activeQuestion.allowCustomAnswer === false) return;
       setComposerCursor(nextCursor);
       updateTrigger(trigger);
       onChangeActivePendingUserInputCustomAnswer(
@@ -1866,10 +1866,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       };
     },
   ): boolean => {
-    if (
-      activePendingUserInput &&
-      activePendingProgress?.activeQuestion?.allowCustomAnswer === false
-    ) {
+    if (activePendingUserInput && isComposerApprovalState) {
       return false;
     }
     const currentText = promptRef.current;
@@ -1929,6 +1926,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   };
   const applyPromptReplacementStable = useStableCallback(applyPromptReplacement);
 
+  const handlePanelCustomAnswerChange = useStableCallback((questionId: string, value: string) => {
+    promptRef.current = value;
+    setComposerCursor(value.length);
+    onChangeActivePendingUserInputCustomAnswer(questionId, value, value.length, value.length, true);
+  });
+
   const readComposerSnapshot = (): {
     value: string;
     cursor: number;
@@ -1957,8 +1960,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     environmentUnavailable !== null ||
     projectSelectionRequired ||
     isComposerApprovalState ||
-    activePendingIsResponding ||
-    activePendingProgress?.activeQuestion?.allowCustomAnswer === false;
+    activePendingIsResponding;
   const speechInput = useEnvironmentSpeechInput({
     environmentId,
     projectId: activeProjectId,
@@ -2489,6 +2491,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     );
   };
   const submitCitationAndSendStable = useStableCallback(submitCitationAndSend);
+  const handlePanelAdvance = useStableCallback(() => {
+    submitComposer();
+  });
   // A question took the editor while a citation comment was
   // unsaved. Keep the comment in the prompt that comes back afterward.
   const saveCitationDraftToPrompt = (replacedValue: string, savedValue: string) => {
@@ -3702,8 +3707,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     answers={activePendingDraftAnswers}
                     questionIndex={activePendingQuestionIndex}
                     onToggleOption={onSelectActivePendingUserInputOption}
-                    onAdvance={onAdvanceActivePendingUserInput}
+                    onSelectOther={onSelectActivePendingUserInputOther}
+                    onChangeCustomAnswer={handlePanelCustomAnswerChange}
+                    onAdvance={handlePanelAdvance}
                     onDismiss={onDismissActivePendingUserInput}
+                    onFocusComposer={scheduleComposerFocus}
                   />
                 ) : null}
               </ComposerBanner.Root>
