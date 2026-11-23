@@ -508,6 +508,9 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
           linkContextMenuItems={linkContextMenuItems}
           linkPillContent={linkPillContent}
           accessibilityLabels={accessibilityLabels}
+          highlights={props.highlights}
+          onRenderedTextChange={props.onRenderedTextChange}
+          onHighlightLayout={props.onHighlightLayout}
         />
       </View>
     );
