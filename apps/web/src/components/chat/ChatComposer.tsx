@@ -1,4 +1,5 @@
 import { copySnapshot } from "./copySnapshot";
+import type { ContextWindowSnapshot } from "@t3tools/client-runtime/state/context-window";
 import { VoiceInputSetup } from "./VoiceInputSetup";
 import { useComposerTypingGuard } from "./useComposerTypingGuard";
 import { insertAttachmentReferencesForDraft } from "./composerAttachmentReferences";
@@ -224,6 +225,7 @@ import {
   ComposerRestingImagePreviews,
 } from "./ComposerAttachmentStrip";
 import { CollapsedComposerStopAction, ComposerPrimaryActions } from "./ComposerPrimaryActions";
+import { ComposerContextRing } from "./ComposerContextRing";
 import { ComposerFooterPrimaryActions } from "./ComposerFooterControls";
 import { ComposerPendingUserInputPanel } from "./ComposerPendingUserInputPanel";
 import { resolveComposerMenuActiveItemId } from "./composerMenuHighlight";
@@ -369,6 +371,8 @@ export interface ChatComposerHandle {
 }
 
 export interface ChatComposerProps {
+  /** The thread's context window use, drawn as a ring in the send and stop buttons. */
+  activeContextWindow?: ContextWindowSnapshot | null;
   composerDraftTarget: ScopedThreadRef | DraftId;
   environmentId: EnvironmentId;
   canOperateThread: boolean;
@@ -3777,11 +3781,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   hasSendableContent={hasMessageToSend}
                   isEditingQueuedMessage={isEditingQueuedMessage}
                   onInterrupt={handleInterruptPrimaryActionStable}
+                  contextWindow={props.activeContextWindow ?? null}
                 >
                   <button
                     type="button"
                     data-chat-composer-transition-actions="true"
-                    className="flex size-8 shrink-0 items-center justify-center rounded-full bg-message-action text-message-action-foreground hover:bg-message-action-hover disabled:opacity-64"
+                    className="relative flex size-8 shrink-0 items-center justify-center rounded-full bg-message-action text-message-action-foreground hover:bg-message-action-hover disabled:opacity-64"
                     disabled={collapsedComposerPrimaryActionDisabled}
                     aria-label={collapsedComposerPrimaryActionLabel}
                     aria-busy={composerSendHeld || isSendBusy || undefined}
@@ -3794,6 +3799,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       else submitComposer();
                     }}
                   >
+                    {props.activeContextWindow ? (
+                      <ComposerContextRing usage={props.activeContextWindow} />
+                    ) : null}
                     {composerSendHeld || isSendBusy ? (
                       <Spinner size="sm" aria-hidden="true" />
                     ) : showResumeAction ? (
@@ -4073,6 +4081,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     key={`${environmentId}:${activeThreadId ?? "new"}`}
                     compact={isComposerPrimaryActionsCompact}
                     canOperateThread={canOperateThread}
+                    activeContextWindow={props.activeContextWindow ?? null}
                     pendingAction={pendingPrimaryAction}
                     isRunning={(phase === "running" || phase === "connecting") && !draftRunsLocally}
                     canInterrupt={canInterrupt}

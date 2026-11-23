@@ -24,6 +24,8 @@ import { StageBackdropButtonArt, useSidebarStageBackdropVariant } from "../Sideb
 import { Button } from "../ui/button";
 import { Spinner } from "../ui/spinner";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import type { ContextWindowSnapshot } from "@t3tools/client-runtime/state/context-window";
+import { ComposerContextRing } from "./ComposerContextRing";
 import {
   alternateComposerDispatchAction,
   resolveComposerDispatchMode,
@@ -69,6 +71,8 @@ interface ComposerPrimaryActionsProps {
   hideCompactToggle?: boolean;
   keepFullHistory?: boolean;
   onToggleKeepFullHistory?: () => void;
+  /** Drawn as a ring inside Send and Stop when the thread reports its context window use. */
+  contextWindow?: ContextWindowSnapshot | null;
 }
 
 const formatPendingPrimaryActionLabel = (
@@ -145,7 +149,9 @@ function StopGenerationButton({
   preserveComposerFocusOnPointerDown,
   onStopRequested,
   onInterrupt,
+  contextWindow = null,
 }: {
+  contextWindow?: ContextWindowSnapshot | null;
   stopPhase: StopPhase;
   canOperateThread: boolean;
   insidePendingAction: boolean;
@@ -162,7 +168,7 @@ function StopGenerationButton({
           <button
             type="button"
             className={cn(
-              "flex shrink-0 cursor-pointer items-center justify-center rounded-full bg-destructive/90 text-white shadow-xs shadow-destructive/24 inset-shadow-control-highlight transition-colors duration-150 hover:bg-destructive active:inset-shadow-control-pressed active:shadow-none disabled:cursor-default disabled:opacity-64 disabled:hover:bg-destructive/90 [&_svg]:pointer-events-none",
+              "relative flex shrink-0 cursor-pointer items-center justify-center rounded-full bg-destructive/90 text-white shadow-xs shadow-destructive/24 inset-shadow-control-highlight transition-colors duration-150 hover:bg-destructive active:inset-shadow-control-pressed active:shadow-none disabled:cursor-default disabled:opacity-64 disabled:hover:bg-destructive/90 [&_svg]:pointer-events-none",
               insidePendingAction ? "size-8 sm:size-7" : "size-8 sm:h-8 sm:w-8",
             )}
             onPointerDown={preserveComposerFocusOnPointerDown ? preventPointerFocus : undefined}
@@ -176,6 +182,9 @@ function StopGenerationButton({
           />
         }
       >
+        {contextWindow && !insidePendingAction ? (
+          <ComposerContextRing usage={contextWindow} />
+        ) : null}
         <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
           <rect x="2" y="2" width="8" height="8" rx="1.5" />
         </svg>
@@ -198,6 +207,7 @@ export function CollapsedComposerStopAction({
   hasSendableContent,
   isEditingQueuedMessage,
   onInterrupt,
+  contextWindow = null,
 }: {
   children: ReactNode;
   canOperateThread: boolean;
@@ -206,6 +216,7 @@ export function CollapsedComposerStopAction({
   hasSendableContent: boolean;
   isEditingQueuedMessage: boolean;
   onInterrupt: () => void;
+  contextWindow?: ContextWindowSnapshot | null;
 }) {
   const [stopPhase, setStopPhase] = useStopPhase({ runId, canInterrupt, canOperateThread });
   if (
@@ -228,6 +239,7 @@ export function CollapsedComposerStopAction({
         preserveComposerFocusOnPointerDown
         onStopRequested={() => setStopPhase("pending")}
         onInterrupt={onInterrupt}
+        contextWindow={contextWindow}
       />
     </span>
   );
@@ -262,6 +274,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   hideCompactToggle = false,
   keepFullHistory = false,
   onToggleKeepFullHistory,
+  contextWindow = null,
 }: ComposerPrimaryActionsProps) {
   const gt = useGT();
   const m = useMessages();
@@ -292,6 +305,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
       preserveComposerFocusOnPointerDown={preserveComposerFocusOnPointerDown}
       onStopRequested={() => setStopPhase("pending")}
       onInterrupt={onInterrupt}
+      contextWindow={contextWindow}
     />
   );
 
@@ -469,6 +483,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
           <StageBackdropButtonArt variant={stageBackdropVariant} />
         </span>
       ) : null}
+      {contextWindow ? <ComposerContextRing usage={contextWindow} /> : null}
       {isBusyOrHeld ? (
         <Spinner size="sm" aria-hidden="true" />
       ) : showResume ? (
