@@ -131,6 +131,7 @@ interface SourceControlTextGenerationSettings {
   readonly modelSelection: ModelSelection;
   readonly projectId: ProjectId | null;
   readonly style: SourceControlWritingStyleSettings;
+  readonly openPullRequestsAsDrafts: boolean;
 }
 
 export interface GitCreatePullRequestResult {
@@ -2847,49 +2848,71 @@ export const make = Effect.gen(function* () {
     fallbackBranch: string | null,
     threadId: ThreadId | undefined,
     emit: GitActionProgressEmitter,
+    projectId: ProjectId | undefined,
     pushRemoteRef?: { readonly remoteName: string; readonly upstreamRef: string },
   ) =>
-    openPrFromBranch(
-      cwd,
-      fallbackBranch,
-      emit,
-      pushRemoteRef,
-      undefined,
-      false,
-      ({ provider, baseBranch, baseRef, headBranch }) =>
-        Effect.gen(function* () {
-          const terms = sourceControlDefinitions.get(provider.kind).changeRequest;
-          yield* emit({
-            kind: "phase_started",
-            phase: "pr",
-            label: `Generating ${terms.shortLabel} content...`,
-          });
-          const baseRangeRef = yield* resolveBaseRangeRef(cwd, baseRef);
-          const rangeContext = yield* gitCore.readRangeContext(cwd, baseRangeRef);
-          const policy = yield* resolveStylePolicy(cwd, settings);
-          const changeRequestTemplate =
-            settings.style.followChangeRequestTemplates && provider.readChangeRequestTemplate
-              ? Option.getOrUndefined(
-                  yield* provider.readChangeRequestTemplate({ cwd, treeish: baseRangeRef }),
-                )
-              : undefined;
-          const threadContext = yield* readThreadContext(threadId);
+    Effect.fn("GitManager.runPrStep")(function* () {
+      const result = yield* openPrFromBranch(
+        cwd,
+        fallbackBranch,
+        emit,
+        pushRemoteRef,
+        undefined,
+        settings.openPullRequestsAsDrafts,
+        ({ provider, baseBranch, baseRef, headBranch }) =>
+          Effect.gen(function* () {
+            const terms = sourceControlDefinitions.get(provider.kind).changeRequest;
+            yield* emit({
+              kind: "phase_started",
+              phase: "pr",
+              label: `Generating ${terms.shortLabel} content...`,
+            });
+            const baseRangeRef = yield* resolveBaseRangeRef(cwd, baseRef);
+            const rangeContext = yield* gitCore.readRangeContext(cwd, baseRangeRef);
+            const policy = yield* resolveStylePolicy(cwd, settings);
+            const changeRequestTemplate =
+              settings.style.followChangeRequestTemplates && provider.readChangeRequestTemplate
+                ? Option.getOrUndefined(
+                    yield* provider.readChangeRequestTemplate({ cwd, treeish: baseRangeRef }),
+                  )
+                : undefined;
+            const threadContext = yield* readThreadContext(threadId);
 
-          return yield* textGeneration.generatePrContent({
-            cwd,
-            baseBranch,
-            headBranch,
-            commitSummary: limitContext(rangeContext.commitSummary, 20_000),
-            diffSummary: limitContext(rangeContext.diffSummary, 20_000),
-            diffPatch: limitContext(rangeContext.diffPatch, 60_000),
-            ...(changeRequestTemplate ? { changeRequestTemplate } : {}),
-            ...(threadContext ? { threadContext } : {}),
-            ...(policy ? { policy } : {}),
-            modelSelection: settings.modelSelection,
-            projectId: settings.projectId,
-          });
-        }),
-    );
+            return yield* textGeneration.generatePrContent({
+              cwd,
+              baseBranch,
+              headBranch,
+              commitSummary: limitContext(rangeContext.commitSummary, 20_000),
+              diffSummary: limitContext(rangeContext.diffSummary, 20_000),
+              diffPatch: limitContext(rangeContext.diffPatch, 60_000),
+              ...(changeRequestTemplate ? { changeRequestTemplate } : {}),
+              ...(threadContext ? { threadContext } : {}),
+              ...(policy ? { policy } : {}),
+              modelSelection: settings.modelSelection,
+              projectId: settings.projectId,
+            });
+          }),
+      );
+      // The same rule createPullRequest applies: a draft request on a provider
+      // without native draft support must still end drafted or fail, never
+      // report success on a ready pull request.
+      const openedAsDraft =
+        result.status === "created" &&
+        (yield* sourceControlProvider(cwd)).createsDraftChangeRequests === true;
+      const prProjectId = settings.projectId ?? projectId;
+      if (
+        settings.openPullRequestsAsDrafts &&
+        !openedAsDraft &&
+        !(prProjectId != null && (yield* draftOpened({ cwd, projectId: prProjectId }, result)))
+      ) {
+        return yield* new GitManagerError({
+          operation: "runPrStep",
+          cwd,
+          detail: "Opened the pull request, but the host does not list it yet to make it a draft.",
+        });
+      }
+      return result;
+    })();
 
   const openPrivatePullRequest = Effect.fn("GitManager.openPrivatePullRequest")(function* (
     input: Parameters<GitManager["Service"]["createPullRequest"]>[0],
@@ -4115,6 +4138,7 @@ export const make = Effect.gen(function* () {
                   modelSelection: settings.textGenerationModelSelection,
                   projectId,
                   style: settings.sourceControlWritingStyle,
+                  openPullRequestsAsDrafts: settings.openPullRequestsAsDrafts,
                 })
               : providerRegistry.getProviders.pipe(
                   Effect.map((providers) => ({
@@ -4125,6 +4149,7 @@ export const make = Effect.gen(function* () {
                     ),
                     projectId,
                     style: settings.sourceControlWritingStyle,
+                    openPullRequestsAsDrafts: settings.openPullRequestsAsDrafts,
                   })),
                 ),
           ),
@@ -4220,6 +4245,7 @@ export const make = Effect.gen(function* () {
                     currentBranch,
                     input.threadId,
                     progress.emit,
+                    input.projectId,
                     "pushRemote" in push && push.pushRemote && push.upstreamBranch
                       ? { remoteName: push.pushRemote, upstreamRef: push.upstreamBranch }
                       : undefined,
