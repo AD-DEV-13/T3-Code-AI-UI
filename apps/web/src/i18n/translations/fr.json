@@ -7087,6 +7087,7 @@
   "4aafe1baf113088a": "Fusionner la pile",
   "0292da19054f2a04": "Chargement de la pile…",
   "583869e6df57abeb": "Cette pull request ne fait plus partie d’une pile.",
+  "2c8f841a78699887": "L’hôte a refusé la modification. Actualisez et réessayez.",
   "9f3f817e9111e162": "Commentée",
   "9736f3763a6476c2": "En attente",
   "e3e1ec05d1224d36": "Impossible d’enregistrer la description",
@@ -12786,5 +12787,9 @@
   "99d51127f573296b": "Autre compte",
   "8ec2c57414669b79": "Connectez un second espace de travail ou utilisateur {tracker}.",
   "99963c0142e17f00": "Pour le nouveau compte {tracker}.",
-  "6d8e4ebc889bace9": "Ajouter un compte"
+  "6d8e4ebc889bace9": "Ajouter un compte",
+  "7c5a90bf39328351": "Cette description a été modifiée ailleurs depuis que vous avez commencé à la modifier. Votre brouillon est conservé ci-dessous.",
+  "8fc15cfdaa9abfc6": "Afficher la description actuelle",
+  "5574a212c0cd0256": "Abandonner mon brouillon",
+  "e5d6dc0c92c17ff7": "Garder mon brouillon"
 }
