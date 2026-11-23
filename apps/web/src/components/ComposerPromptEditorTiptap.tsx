@@ -114,6 +114,7 @@ import {
   COMPOSER_UNDO_GROUP_DELAY,
   type ComposerChangeKind,
   groupUndoByChangeKind,
+  isPasteOrDropTransaction,
   markAsClipboardEdit,
   markAsCompositionReplace,
 } from "~/composer-undo-grouping";
@@ -206,6 +207,8 @@ export interface ComposerPromptEditorProps {
     textChanged: boolean,
     /** True when the change came from undo or redo. */
     fromHistory?: boolean,
+    /** Pasted or dropped text; any trigger it ends in should start dismissed. */
+    fromPaste?: boolean,
   ) => void;
   onVisibleSelectionChange?: () => void;
   onCommandKeyDown?: (key: string, event: KeyboardEvent, isTaskItem?: boolean) => boolean;
@@ -1131,6 +1134,7 @@ function ComposerPromptEditorTiptapInner(
       contextIds,
       previousSnapshot.value !== nextValue,
       isHistoryTransaction(transaction),
+      isPasteOrDropTransaction(transaction),
     );
   };
 
