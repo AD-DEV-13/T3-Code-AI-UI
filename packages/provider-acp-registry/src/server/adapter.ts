@@ -42,8 +42,8 @@ import * as ProviderContinuationRequests from "@t3tools/provider-core/server/Pro
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
 import {
   normalizeAcpRegistryCommands,
-  normalizeAcpRegistryLiveConfiguration,
   normalizeAcpRegistryWebUrl,
+  prepareAcpRegistryLiveConfiguration,
 } from "./probe.ts";
 import * as AcpRegistrySupport from "./AcpRegistrySupport.ts";
 import * as AcpRegistryRuntimeCoordinator from "./AcpRegistryRuntimeCoordinator.ts";
@@ -374,11 +374,25 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
                   ),
               }
             : {}),
-          onSessionConfigurationUpdate: (configOptions, modeState, modelState) =>
-            runtimeCoordinator.publishLiveConfiguration(
-              options.instanceId,
-              normalizeAcpRegistryLiveConfiguration(configOptions, modeState, modelState),
-            ),
+          onSessionConfigurationUpdate: (configOptions, modeState, modelState, updateOptions) => {
+            const prepared = prepareAcpRegistryLiveConfiguration(
+              configOptions,
+              modeState,
+              modelState,
+            );
+            const lastCatalogKey = updateOptions?.lastCatalogKey ?? null;
+            // Only publish a replacement catalog on the first setup update or when an explicit
+            // model selector changes; losing a selector must not republish frozen setup fallback models.
+            const includeCatalog =
+              lastCatalogKey === null ||
+              (prepared.hasModelSelect && lastCatalogKey !== prepared.catalogKey);
+            return runtimeCoordinator
+              .publishLiveConfiguration(
+                options.instanceId,
+                prepared.toLiveConfiguration({ includeCatalog }),
+              )
+              .pipe(Effect.as(includeCatalog ? prepared.catalogKey : lastCatalogKey));
+          },
           onUrlElicitation: ({ elicitationId, url, message }) => {
             const normalizedUrl = normalizeAcpRegistryWebUrl(url);
             if (normalizedUrl === undefined || elicitationId.trim().length === 0) {

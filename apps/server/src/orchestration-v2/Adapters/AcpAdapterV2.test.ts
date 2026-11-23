@@ -5267,7 +5267,9 @@ describe("AcpAdapterV2", () => {
           driver: ACP_TEST_DRIVER,
           capabilities: AcpProviderCapabilitiesV2,
           onSessionConfigurationUpdate: (configOptions) =>
-            Effect.sync(() => publishedConfigurations.push(configOptions)),
+            Effect.sync(() => {
+              publishedConfigurations.push(configOptions);
+            }),
           makeRuntime: makeMockRuntime({
             childProcessSpawner,
             mockAgentPath,
@@ -5337,7 +5339,10 @@ describe("AcpAdapterV2", () => {
       const protocolEvents = yield* Queue.unbounded<EffectAcpProtocol.AcpProtocolLogEvent>();
       const adoptionHandled = yield* Deferred.make<void>();
       const adopted = yield* Deferred.make<void>();
-      const publishedConfigurations: Array<ReadonlyArray<EffectAcpSchema.SessionConfigOption>> = [];
+      const publishedConfigurations: Array<{
+        readonly configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption>;
+        readonly includeCatalog: boolean | undefined;
+      }> = [];
       let publications = 0;
       let acpRuntime: AcpSessionRuntime.AcpSessionRuntime["Service"] | undefined;
       const instanceId = ProviderInstanceId.make("acp-test-late-session-load-selection");
@@ -5353,15 +5358,31 @@ describe("AcpAdapterV2", () => {
               : Effect.void,
           // Holds openSession's own publication until the adapter has seen the
           // late response, so adoption overlaps session configuration.
-          onSessionConfigurationUpdate: (configOptions) =>
-            (publications++ === 0 ? Deferred.await(adoptionHandled) : Effect.void).pipe(
-              Effect.andThen(Effect.sync(() => publishedConfigurations.push(configOptions))),
+          onSessionConfigurationUpdate: (configOptions, _modeState, _modelState, updateOptions) => {
+            const modelOption = configOptions.find(
+              (option) => option.category === "model" && option.type === "select",
+            );
+            const catalogKey = JSON.stringify(
+              modelOption?.type === "select" ? modelOption.options : [],
+            );
+            const includeCatalog = updateOptions?.lastCatalogKey !== catalogKey;
+            return (publications++ === 0 ? Deferred.await(adoptionHandled) : Effect.void).pipe(
+              Effect.andThen(
+                Effect.sync(() =>
+                  publishedConfigurations.push({
+                    configOptions,
+                    includeCatalog,
+                  }),
+                ),
+              ),
               Effect.andThen(
                 configOptions.some((option) => option.category === "model")
                   ? Deferred.succeed(adopted, undefined)
                   : Effect.void,
               ),
-            ),
+              Effect.as(catalogKey),
+            );
+          },
           makeRuntime: makeMockRuntime({
             childProcessSpawner,
             mockAgentPath,
@@ -5425,10 +5446,169 @@ describe("AcpAdapterV2", () => {
         "the selected model was only applied to the provisional setup, which offered no model",
       );
       assert.isTrue(
-        publishedConfigurations.at(-1)?.some((option) => option.category === "model"),
+        publishedConfigurations.at(-1)?.configOptions.some((option) => option.category === "model"),
         "the provisional catalog was published over the late session/load one",
       );
+      const modelPublications = publishedConfigurations.filter((entry) =>
+        entry.configOptions.some((option) => option.category === "model"),
+      );
+      assert.isTrue(
+        modelPublications[0]?.includeCatalog,
+        "adoption must publish the newly observed session catalog",
+      );
+      assert.isFalse(
+        modelPublications.at(-1)?.includeCatalog,
+        "subsequent turn reconfiguration with an unchanged catalog must not re-advertise it",
+      );
     }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
+  it.effect(
+    "deduplicates unchanged config_option_update catalogs and re-advertises on changed choices or active native session replacement",
+    () =>
+      Effect.gen(function* () {
+        const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const selfInvocation = yield* resolveSelfInvocation();
+        const mockAgentPath = yield* bundledMockAgentPath;
+        type Runtime = AcpSessionRuntime.AcpSessionRuntime["Service"];
+        let sessionUpdate: Parameters<Runtime["handleSessionUpdate"]>[0] | undefined;
+        const makeModelSelect = (
+          currentValue: string,
+          choices: ReadonlyArray<{ readonly value: string; readonly name: string }>,
+        ): ReadonlyArray<EffectAcpSchema.SessionConfigOption> => [
+          {
+            id: "model",
+            name: "Model",
+            category: "model",
+            type: "select",
+            currentValue,
+            options: [...choices],
+          },
+        ];
+        const initialChoices = [
+          { value: "default", name: "Default" },
+          { value: "composer-2", name: "Composer 2" },
+        ] as const;
+        let activeConfigOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption> =
+          makeModelSelect("default", initialChoices);
+        const publications: Array<{ readonly includeCatalog: boolean | undefined }> = [];
+        const instanceId = ProviderInstanceId.make("acp-test-catalog-dedupe");
+        const adapter = yield* makeAcpAdapterV2({
+          instanceId,
+          flavor: {
+            driver: ACP_TEST_DRIVER,
+            capabilities: AcpProviderCapabilitiesV2,
+            onSessionConfigurationUpdate: (
+              configOptions,
+              _modeState,
+              _modelState,
+              updateOptions,
+            ) => {
+              const modelOption = configOptions.find(
+                (option) => option.category === "model" && option.type === "select",
+              );
+              const catalogKey = JSON.stringify(
+                modelOption?.type === "select" ? modelOption.options : [],
+              );
+              const includeCatalog = updateOptions?.lastCatalogKey !== catalogKey;
+              return Effect.sync(() => {
+                publications.push({ includeCatalog });
+                return catalogKey;
+              });
+            },
+            makeRuntime: makeMockRuntime({
+              childProcessSpawner,
+              mockAgentPath,
+              wrapRuntime: (runtime) => ({
+                ...runtime,
+                getConfigOptions: Effect.sync(() => activeConfigOptions),
+                handleSessionUpdate: (next) =>
+                  Effect.sync(() => {
+                    sessionUpdate = next;
+                  }).pipe(Effect.andThen(runtime.handleSessionUpdate(next))),
+              }),
+            }),
+          },
+          selfInvocation,
+        });
+        const threadId = ThreadId.make("thread-acp-catalog-dedupe");
+        const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          cwd: process.cwd(),
+        });
+        const modelSelection = { instanceId, model: "default" } as const;
+        const sessionRuntime = yield* adapter.openSession({
+          threadId,
+          providerSessionId: ProviderSessionId.make("provider-session-acp-dedupe"),
+          modelSelection,
+          runtimePolicy,
+        });
+        const providerThread = yield* sessionRuntime.ensureThread({
+          threadId,
+          modelSelection,
+          runtimePolicy,
+        });
+        const initialNativeId = providerThread.nativeThreadRef?.nativeId;
+        if (typeof initialNativeId !== "string") {
+          assert.fail("expected initial native thread id");
+        }
+        assert.deepEqual(
+          publications.map((entry) => entry.includeCatalog),
+          [true],
+          "initial session setup publishes its catalog",
+        );
+
+        // config_option_update with unchanged model choices sets includeCatalog: false.
+        activeConfigOptions = makeModelSelect("composer-2", initialChoices);
+        yield* sessionUpdate!({
+          sessionId: initialNativeId,
+          update: { sessionUpdate: "config_option_update", configOptions: [] },
+        });
+        assert.deepEqual(
+          publications.map((entry) => entry.includeCatalog),
+          [true, false],
+        );
+
+        // config_option_update with changed model choices sets includeCatalog: true.
+        activeConfigOptions = makeModelSelect("composer-2", [
+          ...initialChoices,
+          { value: "composer-3", name: "Composer 3" },
+        ]);
+        yield* sessionUpdate!({
+          sessionId: initialNativeId,
+          update: { sessionUpdate: "config_option_update", configOptions: [] },
+        });
+        assert.deepEqual(
+          publications.map((entry) => entry.includeCatalog),
+          [true, false, true],
+        );
+
+        // Replacing the active native session inside the same openSession (rollbackThread)
+        // resets lastPublishedCatalogKey so the first publication with identical choices
+        // sets includeCatalog: true again.
+        const rolledBack = yield* sessionRuntime.rollbackThread({
+          providerThread,
+          providerThreadTurns: [],
+          target: {
+            type: "thread_start",
+            checkpointId: CheckpointId.make("checkpoint-acp-catalog-dedupe"),
+            appRunOrdinal: 0,
+          },
+        });
+        const rolledBackNativeId = rolledBack.providerThread.nativeThreadRef?.nativeId;
+        if (typeof rolledBackNativeId !== "string") {
+          assert.fail("expected rolled-back native thread id");
+        }
+        yield* sessionUpdate!({
+          sessionId: rolledBackNativeId,
+          update: { sessionUpdate: "config_option_update", configOptions: [] },
+        });
+        assert.deepEqual(
+          publications.map((entry) => entry.includeCatalog),
+          [true, false, true, true],
+        );
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
   // Adoption either reaches the adapter after openSession configured the
