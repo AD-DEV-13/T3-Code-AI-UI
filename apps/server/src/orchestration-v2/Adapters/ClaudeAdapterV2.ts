@@ -5269,7 +5269,7 @@ function formatClaudeUsageLimitWait(waitMs: number): string {
 }
 
 interface ActiveClaudeTurnContext {
-  retryBudgetFailure?: OrchestrationV2ProviderFailure;
+  stopFailure?: OrchestrationV2ProviderFailure;
   // Set when the prompt starts or a request goes out; cleared by the turn's next frame.
   unansweredRequestSince?: DateTime.Utc | undefined;
   // Interrupted once the silence clears, so the session scope stops holding this context.
@@ -6788,7 +6788,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
         ) {
           // A user Stop already in flight keeps its interrupted outcome.
           if ((yield* Ref.get(interruptedTurns)).has(context.providerTurnId)) return;
-          context.retryBudgetFailure = failure;
+          context.stopFailure = failure;
           const liveQuery = yield* Ref.get(queryContext);
           yield* interruptTurn({
             providerThread: context.input.providerThread,
@@ -9706,11 +9706,11 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           readonly threadDisposition?: "reusable" | "broken";
           readonly result?: SDKResultMessage;
         }) {
-          // A turn stopped by the retry budget settles as failed with the retry's error.
-          const retryBudgetFailure = requested.context.retryBudgetFailure;
+          // A turn the adapter stops itself settles as failed with the reason it stopped.
+          const stopFailure = requested.context.stopFailure;
           const input =
-            requested.status === "interrupted" && retryBudgetFailure !== undefined
-              ? { ...requested, status: "failed" as const, failure: retryBudgetFailure }
+            requested.status === "interrupted" && stopFailure !== undefined
+              ? { ...requested, status: "failed" as const, failure: stopFailure }
               : requested;
           input.context.steersClosed = true;
           yield* reasoningDeltas.flushTurn(input.context.nativeTurnId);
@@ -11013,7 +11013,9 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               rateLimitInfo.overageStatus === "allowed_warning" ||
               rateLimitInfo.isUsingOverage === true ||
               rateLimitInfo.overageInUse === true;
-            const blocked = rateLimitInfo.status === "rejected" && !overageAllowed;
+            const blocked =
+              rateLimitInfo.status === "rejected" &&
+              (!overageAllowed || adapterOptions.settings.stopAtExtraUsage);
             const limitType = rateLimitInfo.rateLimitType ?? "unknown";
             if (blocked) {
               context.rejectedRateLimitTypes.add(limitType);
@@ -11069,6 +11071,20 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                   },
                 });
               }
+            }
+            // The CLI keeps working on extra usage and never fails the turn, so stop it here.
+            if (blocked && overageAllowed && context.stopFailure === undefined) {
+              yield* failStalledTurn(
+                context,
+                makeProviderFailure({
+                  class: "usage_limit",
+                  message: "Claude plan limit reached. Stopped instead of using extra usage.",
+                  code: "claude_extra_usage_declined",
+                  retryable: true,
+                  resetAt: claudeUsageLimitResetAt(rateLimitInfo.resetsAt),
+                }),
+                Effect.map(Ref.get(activeTurn), (active) => active === context),
+              ).pipe(Effect.forkIn(sessionScope));
             }
             return;
           }
