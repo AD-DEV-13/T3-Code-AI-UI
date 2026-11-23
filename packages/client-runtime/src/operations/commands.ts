@@ -276,6 +276,10 @@ export interface CancelQueuedRunInput extends ThreadCommandInput {
   readonly runId: RunId;
 }
 
+export interface MergeQueuedRunsInput extends ThreadCommandInput {
+  readonly runIds: ReadonlyArray<RunId>;
+}
+
 export interface RetryWorkspacePreparationInput extends ThreadCommandInput {
   readonly runId: RunId;
 }
@@ -283,6 +287,8 @@ export interface RetryWorkspacePreparationInput extends ThreadCommandInput {
 export interface EditQueuedRunInput extends ThreadCommandInput {
   readonly runId: RunId;
   readonly text: string;
+  readonly expectedText?: string;
+  readonly expectedAttachmentIds?: ReadonlyArray<ChatAttachment["id"]>;
   /**
    * Full replacement attachment list for the queued message. Omitted =
    * text-only edit that leaves attachments untouched.
@@ -1201,6 +1207,17 @@ export const cancelQueuedRun = Effect.fn("EnvironmentCommands.cancelQueuedRun")(
   });
 });
 
+export const mergeQueuedRuns = Effect.fn("EnvironmentCommands.mergeQueuedRuns")(function* (
+  input: MergeQueuedRunsInput,
+) {
+  return yield* dispatch({
+    type: "queued-run.merge",
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+    runIds: input.runIds,
+  });
+});
+
 export const retryWorkspacePreparation = Effect.fn("EnvironmentCommands.retryWorkspacePreparation")(
   function* (input: RetryWorkspacePreparationInput) {
     return yield* dispatch({
@@ -1219,12 +1236,16 @@ export const editQueuedRun = Effect.fn("EnvironmentCommands.editQueuedRun")(func
     input.edit === undefined
       ? undefined
       : yield* persistAttachments(input.threadId, input.edit.messageId, input.edit.attachments);
-  return yield* dispatch({
+  const result = yield* dispatch({
     type: "queued-run.edit",
     commandId: yield* allocateCommandId(input),
     threadId: input.threadId,
     runId: input.runId,
     text: input.text,
+    ...(input.expectedText === undefined ? {} : { expectedText: input.expectedText }),
+    ...(input.expectedAttachmentIds === undefined
+      ? {}
+      : { expectedAttachmentIds: input.expectedAttachmentIds }),
     ...(attachments === undefined ? {} : { attachments }),
     ...(input.edit?.context && attachments
       ? {
@@ -1236,6 +1257,7 @@ export const editQueuedRun = Effect.fn("EnvironmentCommands.editQueuedRun")(func
         }
       : {}),
   });
+  return { ...result, attachments };
 });
 
 export type LinkThreadPullRequestInput = Omit<
