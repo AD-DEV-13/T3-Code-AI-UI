@@ -301,6 +301,8 @@ export const layerBrowserApiCors = Layer.unwrap(
     const wildcardCors = HttpMiddleware.cors({
       allowedMethods: browserApiCorsAllowedMethods,
       allowedHeaders: browserApiCorsAllowedHeaders,
+      // Cross-origin previews validate byte ranges against the size and revision.
+      exposedHeaders: ["content-range", "etag"],
       maxAge: 600,
     });
     const devCors = devOrigin
