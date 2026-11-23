@@ -90,6 +90,7 @@ import {
   IDLE_COMPACTION_TITLES,
   IDLE_COMPACTING_LABELS,
 } from "@t3tools/client-runtime/user-message";
+import { formatWorkingDuration } from "./time";
 
 export type PendingApproval = ThreadPendingApproval;
 export type PendingUserInput = ThreadPendingUserInput;
@@ -1360,7 +1361,7 @@ function deriveThreadFeedRunFolds(
               lastEntryEnd,
             ) ?? lastEntryEnd,
           );
-    const duration = elapsedMs === null ? null : formatDuration(elapsedMs, resolve);
+    const duration = elapsedMs === null ? null : formatWorkingDuration(elapsedMs, resolve);
     const interrupted =
       latestRunMatches && (latestRun.status === "interrupted" || latestRun.status === "cancelled");
     const label = interrupted
